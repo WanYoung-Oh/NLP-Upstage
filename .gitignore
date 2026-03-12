@@ -192,3 +192,9 @@ optuna.db
 !.gitignore
 !.env.template
 !requirements.txt
+
+# ==================================================
+# baseline_code_etc
+# ==================================================
+baseline_code_etc/
+baseline_code_etc/images/

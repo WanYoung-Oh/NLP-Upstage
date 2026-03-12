@@ -37,8 +37,8 @@ evaluate>=0.4.0
 # ==================================================
 # Korean NLP (Required for Korean tasks)
 # ==================================================
-# konlpy>=0.6.0  # 한국어 형태소 분석 (Mecab 설치 필요)
-# python-mecab-ko>=1.0.0  # Mecab wrapper
+konlpy>=0.6.0  # 한국어 형태소 분석 (형태소 기반 ROUGE 평가에 필수)
+# python-mecab-ko>=1.0.0  # Mecab wrapper (konlpy 대안)
 
 # ==================================================
 # Data Processing (Required)
@@ -56,9 +56,30 @@ python-dotenv>=1.0.0
 pyarrow>=14.0.0  # Faster dataset loading
 
 # ==================================================
+# Hyperparameter Optimization (Required for Optuna sweep)
+# ==================================================
+# optuna>=3.1.0             # scipy 의존성 충돌 시 별도 설치: pip install optuna
+# hydra-optuna-sweeper>=1.2.0  # pip install hydra-optuna-sweeper (optuna 설치 후)
+
+# ==================================================
+# QLoRA / PEFT (Required for SOLAR-KO-10.7B fine-tuning)
+# ==================================================
+peft>=0.6.0              # LoRA / QLoRA 적용
+bitsandbytes>=0.41.0     # 4-bit 양자화 (SOLAR QLoRA)
+
+# ==================================================
+# Data Augmentation (Required for EDA/AEDA)
+# ==================================================
+nlpaug>=1.1.11           # EDA/AEDA 데이터 증강
+
+# ==================================================
+# Solar / OpenAI API (Required for Solar API baseline)
+# ==================================================
+openai>=1.2.0            # Solar Chat API 및 OpenAI 호환 엔드포인트
+
+# ==================================================
 # Hydra Plugins (Optional - for advanced features)
 # ==================================================
-# hydra-optuna-sweeper>=1.2.0  # Optuna integration for hyperparameter optimization
 # hydra-joblib-launcher>=1.2.0  # Parallel job execution
 # hydra-ray-launcher>=1.2.0  # Distributed execution with Ray
 

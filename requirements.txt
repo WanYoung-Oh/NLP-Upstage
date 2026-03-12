@@ -1,0 +1,105 @@
+# ==================================================
+# Core Deep Learning Framework
+# ==================================================
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# ==================================================
+# HuggingFace Ecosystem (Required)
+# ==================================================
+transformers>=4.35.0
+datasets>=2.14.0
+tokenizers>=0.15.0
+accelerate>=0.24.0
+sentencepiece>=0.1.99
+protobuf>=3.20.0
+
+# ==================================================
+# Hydra Configuration Management (Required)
+# ==================================================
+hydra-core>=1.3.0
+omegaconf>=2.3.0
+
+# ==================================================
+# Experiment Tracking (Required)
+# ==================================================
+wandb>=0.16.0
+
+# ==================================================
+# Evaluation Metrics (Required)
+# ==================================================
+rouge>=1.0.1
+sacrebleu>=2.3.1
+evaluate>=0.4.0
+
+# ==================================================
+# Korean NLP (Required for Korean tasks)
+# ==================================================
+# konlpy>=0.6.0  # 한국어 형태소 분석 (Mecab 설치 필요)
+# python-mecab-ko>=1.0.0  # Mecab wrapper
+
+# ==================================================
+# Data Processing (Required)
+# ==================================================
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+
+# ==================================================
+# Utilities
+# ==================================================
+tqdm>=4.65.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+pyarrow>=14.0.0  # Faster dataset loading
+
+# ==================================================
+# Hydra Plugins (Optional - for advanced features)
+# ==================================================
+# hydra-optuna-sweeper>=1.2.0  # Optuna integration for hyperparameter optimization
+# hydra-joblib-launcher>=1.2.0  # Parallel job execution
+# hydra-ray-launcher>=1.2.0  # Distributed execution with Ray
+
+# ==================================================
+# Development Tools (Optional)
+# ==================================================
+# jupyter>=1.0.0
+# ipython>=8.12.0
+# matplotlib>=3.7.0
+# seaborn>=0.12.0
+# tensorboard>=2.14.0
+
+# ==================================================
+# Code Quality (Optional)
+# ==================================================
+# black>=23.0.0
+# flake8>=6.0.0
+# isort>=5.12.0
+# mypy>=1.5.0
+
+# ==================================================
+# Testing (Optional)
+# ==================================================
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+
+# ==================================================
+# Notes
+# ==================================================
+# 1. PyTorch 설치:
+#    - CPU: pip install torch torchvision torchaudio
+#    - CUDA 11.8: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#    - CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# 2. Konlpy (한국어 형태소 분석):
+#    - Ubuntu/Debian: sudo apt-get install g++ openjdk-8-jdk python3-dev python3-pip curl
+#    - Mac: brew install mecab mecab-ko mecab-ko-dic
+#    - 설치 후: pip install konlpy
+#
+# 3. Hydra plugins는 필요에 따라 선택적으로 설치
+#    - Optuna sweep: pip install hydra-optuna-sweeper
+#    - Parallel execution: pip install hydra-joblib-launcher
+#
+# 4. 최소 설치 (빠른 시작):
+#    pip install torch transformers hydra-core omegaconf wandb rouge pandas python-dotenv

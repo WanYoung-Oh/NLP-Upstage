@@ -1,0 +1,4 @@
+name: pko_t5
+model_name: "paust/pko-t5-large"
+architecture: "t5"
+prefix: "summarize: "

@@ -1,0 +1,8 @@
+defaults:
+  - beam4
+
+# TTA (Test-Time Augmentation) 설정
+# 발화 역전 N-way 변형 후 MBR로 최적 후보 선택
+# 실행: python src/inference.py inference=tta inference.ckt_path=...
+n_tta_ways: 2          # 원본 + 발화순서역전 (2-way)
+output_filename: "output_tta.csv"

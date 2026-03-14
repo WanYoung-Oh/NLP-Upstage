@@ -1,0 +1,8 @@
+defaults:
+  - baseline
+
+num_train_epochs: 50
+learning_rate: 3e-5
+per_device_train_batch_size: 32
+early_stopping_patience: 5
+label_smoothing_factor: 0.1

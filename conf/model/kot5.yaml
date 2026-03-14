@@ -1,0 +1,4 @@
+name: kot5
+model_name: "psyche/KoT5-summarization"
+architecture: "t5"
+prefix: "summarize: "

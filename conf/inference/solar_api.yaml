@@ -1,0 +1,17 @@
+defaults:
+  - beam4
+
+# inference_type 플래그로 SolarAPIInferencer를 명시적으로 선택합니다.
+inference_type: "solar_api"
+
+# Solar API 설정
+model_name: "solar-pro"
+temperature: 0.1
+top_p: 0.9
+max_tokens: 150
+prompt_style: "few_shot"  # zero_shot | few_shot | chain_of_thought
+n_few_shot: 3
+use_bm25: true  # BM25 기반 동적 few-shot 예제 선택
+rate_limit_rpm: 100
+result_path: "./prediction/"
+output_filename: "output_solar.csv"

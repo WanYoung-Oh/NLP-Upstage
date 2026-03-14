@@ -1,0 +1,6 @@
+defaults:
+  - beam4
+
+num_beams: 8
+length_penalty: 1.2
+batch_size: 16

@@ -1,0 +1,16 @@
+num_beams: 4
+no_repeat_ngram_size: 2
+early_stopping: true
+length_penalty: 1.0
+generate_max_length: 100
+max_length_ratio: 0.0   # > 0 이면 입력 길이 기준 동적 max_new_tokens (예: 0.2 = 20%)
+batch_size: 32
+remove_tokens:
+  - "<usr>"
+  - "<s>"
+  - "</s>"
+  - "<pad>"
+ckt_path: "checkpoints/best_model"
+result_path: "./prediction/"
+# TTA: 발화 역전 N-way 변형 후 MBR 선택 (1=비활성화, 2=원본+역전, ...)
+n_tta_ways: 1

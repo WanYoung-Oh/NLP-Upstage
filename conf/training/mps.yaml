@@ -1,0 +1,8 @@
+# Apple Silicon MPS 환경용 학습 설정 (8GB RAM 기준)
+# 유효 배치 = per_device_train_batch_size × gradient_accumulation_steps = 2 × 16 = 32
+defaults:
+  - baseline
+
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 16

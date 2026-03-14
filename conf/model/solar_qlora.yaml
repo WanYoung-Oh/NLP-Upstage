@@ -1,0 +1,6 @@
+name: solar_qlora
+model_name: "upstage/SOLAR-10.7B-Instruct-v1.0"
+architecture: "causal_lm"
+lora_r: 64
+lora_alpha: 128
+lora_bits: 4

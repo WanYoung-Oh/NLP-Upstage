@@ -1,0 +1,13 @@
+defaults:
+  - baseline
+
+num_train_epochs: 5
+learning_rate: 2e-5
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 4
+fp16: false
+# bfloat16 사용 (4-bit 양자화와 호환)
+bf16: true
+early_stopping_patience: 3
+label_smoothing_factor: 0.0

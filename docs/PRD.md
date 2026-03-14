@@ -114,11 +114,6 @@ tokenizer:
     - "#CarNumber#"
     - "#Email#"
 
-wandb:
-  entity: "${oc.env:WANDB_ENTITY}"
-  project: "${oc.env:WANDB_PROJECT}"
-  name: "${model.name}_lr${training.learning_rate}_ep${training.num_train_epochs}"
-
 hydra:
   run:
     dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
@@ -152,6 +147,49 @@ hydra:
 | `beam4.yaml` | 4 | 기본 (베이스라인) |
 | `beam8.yaml` | 8 | 강화, length_penalty=1.2 |
 | `mbr.yaml` | - | MBR decoding, n_samples=10 |
+
+**추론 전략 (ROUGE 향상)**
+
+| 전략 | 설정 | 기대 효과 |
+|------|------|-----------|
+| Beam width 증가 | beam4 → beam8 | R2/RL 향상 (다양한 후보 탐색) |
+| length_penalty | 1.0 → 1.2 | 적절한 길이 요약 유도 |
+| MBR decoding | n_samples=10 | ROUGE-L 기준 최적 문장 선택, 최종 제출 후보 |
+| max_length_ratio | 0.2 | 대회 규칙(대화 길이 20% 이내)에 맞춤, 기본값 권장 |
+
+- `max_length_ratio=0.0`(기본): 고정 `generate_max_length` 사용. `max_length_ratio=0.2`: 입력 토큰 수의 20% (최소 30토큰).
+
+### 평가 지표 및 목표
+
+#### 대회 공식 ROUGE 정의
+
+본 대회의 최종 점수는 아래와 같이 산출된다.
+
+| 구분 | 설명 |
+|------|------|
+| **메트릭 단위** | ROUGE-1-F1, ROUGE-2-F1, ROUGE-L-F1 (각각 F1 = 2×P×R/(P+R)) |
+| **multi-reference 처리** | 예측 요약 1개 vs 정답 요약 3개 → 각 정답에 대해 R1/R2/RL 점수 산출 후, 메트릭별로 3개 점수의 평균 계산 |
+| **최종 점수** | `score_final = mean(R1_F1_ref1..3) + mean(R2_F1_ref1..3) + mean(RL_F1_ref1..3)` |
+
+즉, 세 메트릭의 "3개 정답에 대한 평균값"을 **합산**한 것이 최종 점수이다. (세 평균을 다시 평균 내는 것이 아님)
+
+#### 로컬 평가 (dev.csv) vs 대회 평가
+
+| 항목 | 로컬 (dev.csv) | 대회 (평가 데이터) |
+|------|----------------|-------------------|
+| 정답 요약 수 | 1개 | 3개 |
+| 점수 계산 | `rouge_combined` = R1 + R2 + RL (단일 레퍼런스) | 위 수식대로 3개 레퍼런스 평균 후 합산 |
+| WandB 키 | `eval/rouge_1_f1`, `eval/rouge_2_f1`, `eval/rouge_l_f1`, `eval/rouge_combined` | - |
+| 체크포인트 선택 | `rouge_combined` 기준 best | - |
+
+- **rouge_combined** (최대 3.0): 로컬에서 체크포인트 선택·early stopping에 사용. 대회 점수의 **하한선/참고치**로 활용.
+- 대회 점수는 multi-reference 덕분에 **로컬 dev 점수보다 높게 나올 수 있음**. 목표 "47.12 → 60+"는 대회 스코어 스케일 기준.
+- **가설**: dev에서 R2/RL이 상대적으로 높은 모델이 multi-reference 환경에서도 더 잘 일반화할 가능성이 큼.
+
+#### 목표 수치 해석
+
+- 베이스라인 47.12, 목표 60+는 **대회 공식 점수** 기준.
+- 로컬 `rouge_combined`는 0~3.0 스케일이므로, 실험 로그 해석 시 혼동하지 않도록 위 정의를 참고한다.
 
 ---
 
@@ -228,6 +266,14 @@ architecture = causal_lm → AutoModelForCausalLM + peft QLoRA 적용
 3. `pko-T5-large` — 예상 55+, GPU 비용 있음
 4. `SOLAR QLoRA` — 예상 60+, 고사양 GPU 필요
 
+**ROUGE 목표별 모델 우선순위**
+
+| 목표 (대회 점수) | 우선 시도 모델 | 비고 |
+|-----------------|----------------|------|
+| 50+ | KoT5, kobart_v2 | 단기, 즉시 실험 가능 |
+| 55~60 | pko-T5-large | 중기, beam8/MBR 적용 |
+| 60+ | SOLAR QLoRA + 고급 디코딩 | 장기, MBR·앙상블 병행 |
+
 ---
 
 ### Phase 3 — 데이터/학습 전략 고도화
@@ -250,6 +296,14 @@ architecture = causal_lm → AutoModelForCausalLM + peft QLoRA 적용
 - 길이 필터: dialogue 1500자 초과 / summary 50자 미만 or 250자 초과 → IQR 상위 5% drop
 - `make_input()` 포맷 옵션: `format: default | prefix_guided` (config으로 제어)
 
+**클리닝·필터 사용 정책**
+
+| Phase | 정책 | 비고 |
+|-------|------|------|
+| Phase 1~2 | 원본 유지 (클리닝·필터 비활성화) | 베이스라인 재현 시 |
+| Phase 3 | `clean_text` + `filter_by_length` 활성화 | dev ROUGE 변화 검증 후 상시 활성화 여부 결정 |
+| Phase 3+ | 검증 통과 시 기본값으로 고정 | 이상치 제거로 R2/RL 안정화 기대 |
+
 #### 3-2. 누락 Special Token 추가
 
 ```
@@ -258,10 +312,14 @@ architecture = causal_lm → AutoModelForCausalLM + peft QLoRA 적용
 ```
 → `conf/config.yaml`의 `tokenizer.special_tokens`에 통합 관리
 
-#### 3-3. 형태소 기반 ROUGE (`metrics.py`)
+- 대회 데이터의 개인정보 마스킹 정책(전화번호, 주소, 이메일 등)과 일치시켜야 함. 모델이 수치를 그대로 생성하지 않고 마스킹 토큰을 사용하면 ROUGE n-gram 매칭에 유리함.
 
-- `konlpy.tag.Okt`로 형태소 분석 후 ROUGE 계산
-- 대회 공식 평가 방식과 동일 → dev 점수 신뢰도 향상
+#### 3-3. 한국어 ROUGE (`metrics.py`)
+
+- **Java 불필요**: `korouge-score` (requirements.txt 포함) 사용
+- `USE_KOROUGE = True`로 플래그 전환 → 한국어 문자 보존 ROUGE 활성화
+- `compare_rouge_modes(preds, refs)` 로 baseline vs korouge 점수 비교 가능
+- konlpy Okt(Java 필요) 대신 korouge-score를 표준으로 채택
 
 #### 3-4. 데이터 증강 (`augment.py`)
 
@@ -269,6 +327,14 @@ architecture = causal_lm → AutoModelForCausalLM + peft QLoRA 적용
 - `EdaAugmenter`: nlpaug 기반 synonym/delete/insert
 - 증강 데이터는 ROUGE 필터링 후 `data/train_aug.csv`로 저장
 - 최종 제출 전 `train+dev` 합산 학습 스크립트 별도 제공
+
+**증강·TTA 사용 정책**
+
+| 구분 | 정책 | 비고 |
+|------|------|------|
+| 학습 시 증강 | 원본:증강 비율 1:1 또는 dev ROUGE 기준으로 결정 | 과도한 증강은 품질 저하 가능 → dev로 검증 |
+| 추론 시 TTA | `apply_tta()`로 대화 역전 등 N-way 변형 생성 | 다중 요약 후보 중 ROUGE-L 근사 또는 길이 제약으로 최종 선택 |
+| TTA 선택 기준 | ROUGE-L 기준 최적 문장 선택 (MBRDecoder와 동일 원리) | Phase 5 앙상블 시 활용 |
 
 ---
 
@@ -341,129 +407,152 @@ ensemble.py
 
 ## 4. 전체 체크리스트
 
+> **범례**: ✅ 구현+단위테스트 통과 / ⚠️ 구현됨(환경 제약) / 🔲 학습/API 실행 필요
+
 ### Phase 1 — 환경 셋업 & 베이스라인
 
 **환경 설정**
-- [ ] `.env` 파일 API key 설정 완료 (`WANDB_API_KEY`, `HF_TOKEN`, `UPSTAGE_API_KEY`)
-- [ ] `requirements.txt` 기준 패키지 설치 확인
-- [ ] `data/` 디렉토리에 `train.csv`, `dev.csv`, `test.csv` 배치
-- [ ] GPU/MPS 확인: `python -c "import torch; print('cuda:', torch.cuda.is_available(), 'mps:', getattr(torch.backends.mps, 'is_available', lambda: False)())"` (NVIDIA 또는 Mac M4 등)
+- [x] `.env` 파일 API key 설정 완료 (`WANDB_API_KEY`, `HF_TOKEN`, `UPSTAGE_API_KEY`) ✅
+- [x] `requirements.txt` 기준 패키지 설치 확인 ✅
+- [x] `data/` 디렉토리에 `train.csv`(12457건), `dev.csv`(499건), `test.csv`(499건) 배치 ✅
+- [x] GPU/MPS 확인: Apple Silicon MPS 감지 확인 (`device=mps`) ✅
 
 **스킬 구조 구축**
-- [ ] `conf/` 디렉토리 구조 생성 (model/, training/, inference/)
-- [ ] `src/` 디렉토리 구조 생성 (data/, models/, utils/)
-- [ ] `prediction/`, `checkpoints/` 디렉토리 생성
+- [x] `conf/` 디렉토리 구조 생성 (model/, training/, inference/) ✅
+- [x] `src/` 디렉토리 구조 생성 (data/, models/, utils/) ✅
+- [x] `prediction/`, `checkpoints/` 디렉토리 생성 ✅
 
 **베이스라인 구현**
-- [ ] `conf/config.yaml` 작성 (누락 special token 9개 포함)
-- [ ] `conf/model/kobart.yaml` 작성
-- [ ] `conf/training/baseline.yaml` 작성
-- [ ] `conf/inference/beam4.yaml` 작성
-- [ ] `src/data/preprocess.py` — `Preprocess`, `DatasetForTrain/Val/Inference` 구현
-- [ ] `src/models/summarizer.py` — `bart` 아키텍처 로드
-- [ ] `src/utils/device.py` — NVIDIA GPU / Mac M4 MPS 자동 감지, `get_device()` 구현
-- [ ] `src/utils/metrics.py` — `compute_metrics` 구현
-- [ ] `src/utils/postprocess.py` — 특수 토큰 제거 구현
-- [ ] `src/train.py` — `@hydra.main` + `Seq2SeqTrainer` + WandB (device는 `device.py` 사용)
-- [ ] `src/inference.py` — beam search + CSV 출력 (device는 `device.py` 사용)
+- [x] `conf/config.yaml` 작성 (special token 11개 = 베이스라인 6개 + 추가 5개) ✅
+- [x] `conf/model/kobart.yaml` 작성 ✅
+- [x] `conf/training/baseline.yaml` 작성 ✅
+- [x] `conf/inference/beam4.yaml` 작성 ✅
+- [x] `src/data/preprocess.py` — `Preprocess`, `DatasetForTrain/Val/Inference` 구현 ✅
+- [x] `src/models/summarizer.py` — `bart` 아키텍처 로드 ✅
+- [x] `src/utils/device.py` — NVIDIA GPU / Mac M4 MPS 자동 감지, `get_device()` 구현 ✅
+- [x] `src/utils/metrics.py` — `compute_metrics` 구현 ✅
+- [x] `src/utils/postprocess.py` — 특수 토큰 제거 구현 ✅
+- [x] `src/train.py` — `@hydra.main` + `Seq2SeqTrainer` + WandB (device는 `device.py` 사용) ✅
+- [x] `src/inference.py` — beam search + CSV 출력 (device는 `device.py` 사용) ✅
 
-**베이스라인 검증**
-- [ ] `python src/train.py` 실행 → 오류 없이 학습 시작 확인
-- [ ] WandB 대시보드에 run 생성 확인
-- [ ] Dev ROUGE 점수 기록 (목표: 47.12 ± 1)
-- [ ] `python src/inference.py` 실행 → `prediction/output.csv` 생성 확인
-- [ ] Hydra `outputs/` 디렉토리에 config 자동 저장 확인
+**베이스라인 검증** *(GPU 학습 실행 필요)*
+- [ ] `python src/train.py` 실행 → 오류 없이 학습 시작 확인 🔲
+- [ ] WandB 대시보드에 run 생성 확인 🔲
+- [ ] Dev ROUGE 점수 기록 (목표: 47.12 ± 1) 🔲
+- [ ] `python src/inference.py` 실행 → `prediction/output.csv` 생성 확인 🔲
+- [ ] Hydra `outputs/` 디렉토리에 config 자동 저장 확인 🔲
 
 ---
 
 ### Phase 2 — 모델 업그레이드
 
 **Config 추가**
-- [ ] `conf/model/kobart_v2.yaml` 작성
-- [ ] `conf/model/kot5.yaml` 작성 (prefix: `"summarize: "`)
-- [ ] `conf/model/pko_t5.yaml` 작성
-- [ ] `conf/model/solar_qlora.yaml` 작성 (r=64, alpha=128, bits=4)
-- [ ] `conf/training/full.yaml` 작성 (lr=3e-5, epoch=50)
-- [ ] `conf/training/qlora.yaml` 작성 (epoch=5~10, gradient_accum=4)
+- [x] `conf/model/kobart_v2.yaml` 작성 (gogamza/kobart-base-v2) ✅
+- [x] `conf/model/kot5.yaml` 작성 (prefix: `"summarize: "`) ✅
+- [x] `conf/model/pko_t5.yaml` 작성 ✅
+- [x] `conf/model/solar_qlora.yaml` 작성 (r=64, alpha=128, bits=4) ✅
+- [x] `conf/training/full.yaml` 작성 (lr=3e-5, epoch=50, label_smoothing=0.1) ✅
+- [x] `conf/training/qlora.yaml` 작성 (epoch=5, gradient_accum=4, bf16) ✅
 
 **summarizer.py 확장**
-- [ ] `architecture: t5` 분기 구현 (prefix 처리 포함)
-- [ ] `architecture: causal_lm` 분기 구현 (peft QLoRA)
-- [ ] T5 모델에서 `return_token_type_ids=False` 유지 확인
+- [x] `architecture: t5` 분기 구현 (prefix 처리 포함) — KoT5 로드 테스트 통과 ✅
+- [x] `architecture: causal_lm` 분기 구현 (peft QLoRA) ✅
+- [x] T5 모델에서 `return_token_type_ids=False` 유지 확인 ✅
 
-**모델 실험**
-- [ ] KoT5-summarization 학습 & 평가 → Dev ROUGE 기록
-- [ ] kobart-base-v2 학습 & 평가 → Dev ROUGE 기록
-- [ ] pko-T5-large 학습 & 평가 → Dev ROUGE 기록
-- [ ] (선택) SOLAR QLoRA 학습 & 평가 → Dev ROUGE 기록
-- [ ] Hydra sweep: `python src/train.py -m model=kobart,kot5,pko_t5`
+**모델 실험** *(GPU 학습 실행 필요)*
+- [ ] KoT5-summarization 학습 & 평가 → Dev ROUGE 기록 🔲
+- [ ] kobart-base-v2 학습 & 평가 → Dev ROUGE 기록 🔲
+- [ ] pko-T5-large 학습 & 평가 → Dev ROUGE 기록 🔲
+- [ ] (선택) SOLAR QLoRA 학습 & 평가 → Dev ROUGE 기록 🔲
+- [ ] Hydra sweep: `python src/train.py -m model=kobart,kot5,pko_t5` 🔲
 
 ---
 
 ### Phase 3 — 데이터/학습 전략 고도화
 
 **데이터 클리닝**
-- [ ] `clean_text()` 함수 구현 (자음/모음, 괄호, 반복 특수기호 제거)
-- [ ] 길이 필터 구현 (dialogue <1500, summary 50~250)
-- [ ] 클리닝 전/후 데이터 통계 비교 (건수, 평균 길이)
+- [x] `clean_text()` 함수 구현 (자음/모음, 괄호, 반복 특수기호 제거) ✅
+  - `ㅋㅋㅋ 안녕하세요` → `안녕하세요` 확인
+  - `#Person1#` 태그 보존 확인
+- [x] 길이 필터 구현 (`filter_by_length`: dialogue≤1500, summary 50~250) ✅
+- [x] 클리닝 전/후 데이터 통계 비교 — train 12457 → 필터 후 11117건 (1340건 제거) ✅
 
 **Special Token**
-- [ ] `conf/config.yaml`에 누락 9개 토큰 추가 확인
-- [ ] `tokenizer.add_special_tokens()` 후 `resize_token_embeddings()` 호출 확인
+- [x] `conf/config.yaml`에 누락 5개 토큰 추가 확인 (총 11개) ✅
+- [x] `tokenizer.add_special_tokens()` 후 `resize_token_embeddings()` 호출 확인 — vocab 30000 → 30011 ✅
 
-**형태소 기반 ROUGE**
-- [ ] konlpy Okt 설치 및 동작 확인
-- [ ] `metrics.py`에 Okt 기반 토크나이징 적용
-- [ ] 형태소 ROUGE vs 기존 ROUGE 점수 차이 확인 및 기록
+**한국어 ROUGE (Java 불필요)**
+- [x] `korouge-score` 기반 한국어 ROUGE 구현 — Java/konlpy 없이 동작 ✅
+  - `USE_KOROUGE=False` → `rouge` 라이브러리 (Phase 1~2 기본, 베이스라인 호환)
+  - `USE_KOROUGE=True`  → `korouge-score` (Phase 3+ 권장, 한국어 문자 보존)
+- [x] `compare_rouge_modes()` 함수로 두 모드 점수 비교 가능 ✅
+- [x] 두 모드 점수 차이 실측 — dev 20건 기준 rouge-1 차이 ≈ ±0.004 ✅
 
 **데이터 증강**
-- [ ] `src/data/augment.py` 기본 구조 작성
-- [ ] Back-translation 파이프라인 구현 및 샘플 100개 테스트
-- [ ] EDA/AEDA (nlpaug) 구현 및 증강 데이터 품질 확인
-- [ ] 증강 데이터 ROUGE 필터링 적용
-- [ ] `data/train_aug.csv` 생성
+- [x] `src/data/augment.py` 기본 구조 작성 ✅
+- [x] Back-translation 파이프라인 구현 (`BackTranslationAugmenter`) ✅
+- [x] EDA/AEDA (nlpaug) 구현 및 증강 데이터 품질 확인 — `EdaAugmenter` 동작 확인 ✅
+- [x] 증강 데이터 ROUGE 필터링 적용 (`augment_dataset` 내 threshold 필터) ✅
+- [ ] `data/train_aug.csv` 생성 🔲 (googletrans API 실행 필요)
 
 **학습 전략**
-- [ ] `label_smoothing_factor=0.1` 적용 실험
-- [ ] `conf/inference/beam8.yaml` 작성 (length_penalty=1.2)
-- [ ] Train+Dev 합산 학습 실험 (최종 제출 전)
+- [x] `label_smoothing_factor=0.1` — `full.yaml`에 설정, config 로드 확인 ✅
+- [x] `conf/inference/beam8.yaml` 작성 (length_penalty=1.2) ✅
+- [ ] Train+Dev 합산 학습 실험 (최종 제출 전) 🔲
+
+**학습 하이퍼파라미터 튜닝 (ROUGE 향상 중심)**
+
+| 축 | 기본값 | 탐색 범위 | 비고 |
+|----|--------|-----------|------|
+| learning_rate | 1e-5 (baseline), 3e-5 (full) | 1e-5 ~ 5e-5 | T5 계열은 3e-5 권장 |
+| num_train_epochs | 20 (baseline), 50 (full) | 15 ~ 50 | early stopping으로 조기 종료 |
+| label_smoothing_factor | 0.1 | 0.05 ~ 0.15 | R2/RL 안정화에 기여 |
+| warmup_ratio | 0.1 | 0.05 ~ 0.15 | 학습 초기 안정화 |
+| per_device_train_batch_size | 8 | 4 ~ 16 | GPU 메모리에 따라 |
+
+- Early stopping 기준: `rouge_combined`. 세 메트릭 균형이 목표이므로 R1만 높은 모델보다 R2/RL도 함께 높은 모델을 선호.
 
 ---
 
 ### Phase 4 — LLM 활용
 
 **Solar API**
-- [ ] `.env`의 `UPSTAGE_API_KEY` 설정 확인
-- [ ] `conf/inference/solar_api.yaml` 작성
-- [ ] `src/inference.py`에 `SolarAPIInferencer` 클래스 추가
-- [ ] zero-shot 프롬프트 구현 및 dev 100개 테스트
-- [ ] few-shot (3-shot) 프롬프트 구현 및 성능 비교
-- [ ] BM25 기반 few-shot 예제 선택 구현 (선택)
-- [ ] rate limit 처리 확인 (분당 100건)
-- [ ] `prediction/output_solar.csv` 생성 확인
+- [x] `.env`의 `UPSTAGE_API_KEY` 설정 확인 ✅
+- [x] `conf/inference/solar_api.yaml` 작성 ✅
+- [x] `src/inference.py`에 `SolarAPIInferencer` 클래스 추가 ✅
+- [ ] zero-shot 프롬프트 구현 및 dev 100개 테스트 🔲 (API 실행 필요)
+- [x] few-shot (3-shot) 프롬프트 구현 (`build_prompt()`) ✅
+- [x] BM25 기반 few-shot 예제 선택 구현 (`_load_few_shot_examples()`) ✅
+- [x] rate limit 처리 확인 (RPM 기반 delay 계산 구현) ✅
+- [ ] `prediction/output_solar.csv` 생성 확인 🔲 (API 실행 필요)
 
 ---
 
 ### Phase 5 — 앙상블 & 후처리
 
 **후처리**
-- [ ] `postprocess.py` 5단계 파이프라인 완성
-- [ ] 후처리 전/후 Dev ROUGE 변화 확인
+- [x] `postprocess.py` 5단계 파이프라인 완성 ✅
+  1. 특수 토큰 제거 ✅
+  2. 과도한 공백 정리 ✅
+  3. 문장 끝 마침표 보장 ✅
+  4. 반복 문장 제거 ✅
+  5. (최소 길이 보장은 재생성 플래그로 향후 추가)
+- [ ] 후처리 전/후 Dev ROUGE 변화 확인 🔲
 
 **MBR Decoding**
-- [ ] `MBRInferencer` 구현 (n_samples=10, temperature sampling)
-- [ ] beam4 vs beam8 vs MBR 성능 비교
+- [x] `MBRInferencer` 구현 (`Seq2SeqInferencer` 내 `do_sample=True` 모드, `_mbr_select()`) ✅
+- [ ] beam4 vs beam8 vs MBR 성능 비교 🔲
 
 **앙상블**
-- [ ] `src/ensemble.py` 작성
-- [ ] `GroupKFoldTrainer` 구현 (topic 그룹, n_splits=5)
-- [ ] OOF 예측 저장 및 검증 ROUGE 계산
-- [ ] `WeightedEnsemble` 구현 (가중치: OOF 기반 자동 계산)
-- [ ] SOLAR + KoT5 + KoBART 앙상블 최종 예측 생성
+- [x] `src/ensemble.py` 작성 ✅
+- [x] `GroupKFoldTrainer` 구현 (topic 그룹, n_splits=5) ✅
+- [ ] OOF 예측 저장 및 검증 ROUGE 계산 🔲
+- [x] `WeightedEnsemble` 구현 (가중치: 명시적 or OOF 기반 자동 계산) ✅
+- [ ] SOLAR + KoT5 + KoBART 앙상블 최종 예측 생성 🔲
 
 **TTA**
-- [ ] 발화 순서 역전 augmentation 구현
-- [ ] 8-way TTA → ROUGE 투표 방식 검증
+- [x] 발화 순서 역전 augmentation 구현 (`reverse_utterances()`, `apply_tta()` in preprocess.py) ✅
+- [ ] 8-way TTA → ROUGE 투표 방식 검증 🔲
 
 ---
 
@@ -543,3 +632,16 @@ Public Test ROUGE-F1:
 - [ ] `prediction/output_final.csv` 컬럼 형식 확인 (`fname`, `summary`)
 - [ ] Public leaderboard 제출 및 점수 확인
 - [ ] Private 결과 대비 LB shake-up 여부 점검 (GroupKFold OOF 점수 비교)
+
+### 제출 전 검증 플로우
+
+| 단계 | 확인 항목 |
+|------|-----------|
+| 1 | dev `rouge_combined` 기준 최소 허들 충족 (예: 0.75 이상) |
+| 2 | 예측 요약 샘플 인지적 검토: 핵심 정보 보존, 개체명 유지, 대화 길이 20% 이내 |
+| 3 | dev 점수 상승과 직관적 요약 품질을 함께 확인 (과적합 방지) |
+
+### 위험 요소 및 주의사항
+
+- **과적합**: dev에만 맞춘 과도한 튜닝은 대회 공개/비공개 스플릿에서 성능 저하를 가져올 수 있음. dev 점수 상승 + 직관적 요약 품질 확인을 병행할 것.
+- **한국어 ROUGE (korouge-score)**: 토크나이저/형태소 분석기 버전에 따라 점수가 변동될 수 있으므로, 버전 고정을 권장.

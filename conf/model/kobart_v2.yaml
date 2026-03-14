@@ -1,0 +1,3 @@
+name: kobart_v2
+model_name: "gogamza/kobart-base-v2"
+architecture: "bart"

@@ -1,0 +1,4 @@
+name: kobart
+model_name: "digit82/kobart-summarization"
+architecture: "bart"
+revision: "refs/pr/1"

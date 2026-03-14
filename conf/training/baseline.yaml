@@ -1,0 +1,27 @@
+num_train_epochs: 20
+learning_rate: 1e-5
+per_device_train_batch_size: 50
+per_device_eval_batch_size: 32
+warmup_ratio: 0.1
+weight_decay: 0.01
+lr_scheduler_type: "cosine"
+optim: "adamw_torch"
+gradient_accumulation_steps: 1
+max_grad_norm: 1.0
+evaluation_strategy: "epoch"
+save_strategy: "epoch"
+save_total_limit: 3
+fp16: true
+load_best_model_at_end: true
+predict_with_generate: true
+generation_max_length: 100
+do_train: true
+do_eval: true
+logging_strategy: "epoch"
+early_stopping_patience: 3
+early_stopping_threshold: 0.001
+report_to: "wandb"
+label_smoothing_factor: 0.0
+seed: 42
+# true로 설정하면 train.csv + dev.csv 전체 데이터로 학습 (최종 제출 전 사용)
+use_all_data: false

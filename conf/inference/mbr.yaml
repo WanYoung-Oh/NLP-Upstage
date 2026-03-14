@@ -1,0 +1,10 @@
+defaults:
+  - beam4
+
+# MBR Decoding 설정
+n_samples: 10
+temperature: 0.9
+top_p: 0.95
+do_sample: true
+num_beams: 1  # MBR은 샘플링 기반이므로 beam=1
+batch_size: 8

@@ -71,9 +71,10 @@ peft>=0.6.0              # LoRA / QLoRA 적용
 bitsandbytes>=0.41.0     # 4-bit 양자화 (SOLAR QLoRA)
 
 # ==================================================
-# Data Augmentation (Required for EDA/AEDA)
+# Data Augmentation (Required for EDA/AEDA, Back-Translation)
 # ==================================================
 nlpaug>=1.1.11           # EDA/AEDA 데이터 증강
+deep-translator>=1.11.0  # 역번역 증강 (ko→en→ko)
 
 # ==================================================
 # Solar / OpenAI API (Required for Solar API baseline)

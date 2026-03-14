@@ -171,11 +171,16 @@ def main(cfg: DictConfig) -> None:
     os.environ["WANDB_LOG_MODEL"] = "end"
     os.environ["WANDB_WATCH"] = "false"
 
-    # WandB 초기화 — entity/project는 .env에서 로드, run name은 config 값으로 자동 생성
+    # 체크포인트 저장 디렉토리: {checkpoints_root}/yymmdd_run_NNN (run_name에 포함하기 위해 먼저 계산)
+    checkpoints_root = _resolve_data_path(cfg.general.checkpoints_root)
+    run_id = _next_run_id(checkpoints_root)
+
+    # WandB 초기화 — entity/project는 .env에서 로드, run name에 yymmdd_run_id 포함
     run_name = (
         f"{cfg.model.name}"
         f"_lr{cfg.training.learning_rate}"
         f"_ep{cfg.training.num_train_epochs}"
+        f"_{run_id}"
     )
     wandb.init(
         entity=os.environ.get("WANDB_ENTITY"),
@@ -197,10 +202,6 @@ def main(cfg: DictConfig) -> None:
     preprocessor = Preprocess(cfg.tokenizer.bos_token, cfg.tokenizer.eos_token)
     train_dataset, val_dataset = _prepare_datasets(cfg, preprocessor, tokenizer)
 
-    # 체크포인트 저장 디렉토리: {checkpoints_root}/yymmdd_run_NNN
-    # cfg.general.checkpoints_root가 상대 경로면 _LAUNCH_DIR 기준으로 해석합니다.
-    checkpoints_root = _resolve_data_path(cfg.general.checkpoints_root)
-    run_id = _next_run_id(checkpoints_root)
     output_dir = os.path.join(checkpoints_root, run_id)
     os.makedirs(output_dir, exist_ok=True)
 

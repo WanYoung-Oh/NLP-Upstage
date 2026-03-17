@@ -132,7 +132,15 @@ class Seq2SeqInferencer:
         preprocessor = Preprocess(cfg.tokenizer.bos_token, cfg.tokenizer.eos_token)
         test_file = os.path.join(_resolve(cfg.general.data_path), "test.csv")
         test_data = preprocessor.make_set_as_df(test_file, is_train=False)
-        enc_input_raw, _ = preprocessor.make_input(test_data, is_test=True, prefix=prefix)
+
+        # use_topic=True이면 test.csv에 topic 없으므로 [MASK] prefix 자동 적용
+        data_cfg = getattr(cfg, "data", None)
+        use_topic: bool = getattr(data_cfg, "use_topic", False) if data_cfg else False
+
+        enc_input_raw, _ = preprocessor.make_input(
+            test_data, is_test=True, prefix=prefix,
+            use_topic=use_topic, topic_mask_prob=0.0,
+        )
 
         if n_tta_ways >= 2:
             return self._run_tta(model, tokenizer, enc_input_raw, test_data, n_tta_ways)
@@ -234,6 +242,187 @@ class Seq2SeqInferencer:
         result_path = _resolve(cfg.inference.result_path)
         os.makedirs(result_path, exist_ok=True)
         output_filename = getattr(cfg.inference, "output_filename", "output.csv")
+        output = pd.DataFrame({"fname": text_ids, "summary": processed})
+        out_path = os.path.join(result_path, output_filename)
+        output.to_csv(out_path, index=False)
+        print(f"Saved → {out_path}")
+        return output
+
+
+# ---------------------------------------------------------------------------
+# Causal LM Inferencer (SOLAR QLoRA, Phase 4)
+# ---------------------------------------------------------------------------
+
+class CausalLMInferencer:
+    """SOLAR QLoRA 기반 Causal LM 추론기.
+
+    - eval_split="test" (기본): test.csv 추론 → CSV 저장
+    - eval_split="dev": dev.csv 추론 → ROUGE 점수 출력 (평가 모드)
+    """
+
+    def __init__(self, cfg: DictConfig) -> None:
+        self.cfg = cfg
+
+    def _load_model_and_tokenizer(self):
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from peft import PeftModel  # type: ignore
+
+        cfg = self.cfg
+        model_name = cfg.model.model_name
+        ckt_path = _resolve(cfg.inference.ckt_path)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.add_special_tokens(
+            {"additional_special_tokens": list(cfg.tokenizer.special_tokens)}
+        )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"  # causal LM 배치 생성은 left-padding 필요
+
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        base_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+        )
+        base_model.resize_token_embeddings(len(tokenizer))
+        model = PeftModel.from_pretrained(base_model, ckt_path)
+        model.eval()
+        print(f"[CausalLMInferencer] 모델 로드 완료: {model_name} + {ckt_path}")
+        return model, tokenizer
+
+    def _build_prompts(self, df: pd.DataFrame) -> list[str]:
+        cfg = self.cfg
+        data_cfg = getattr(cfg, "data", None)
+        use_topic: bool = getattr(data_cfg, "use_topic", False) if data_cfg else False
+        prompts = []
+        for _, row in df.iterrows():
+            dialogue = str(row["dialogue"])
+            topic_line = f"주제: [MASK]\n" if use_topic else ""
+            prompts.append(
+                f"[INST] {topic_line}다음 대화를 한국어로 요약하세요:\n{dialogue}\n[/INST]\n"
+            )
+        return prompts
+
+    def _generate_summaries(self, model, tokenizer, prompts: list[str]) -> list[str]:
+        cfg = self.cfg
+        batch_size = cfg.inference.batch_size
+        summaries: list[str] = []
+
+        for i in tqdm(range(0, len(prompts), batch_size), desc="CausalLM Inference"):
+            batch_prompts = prompts[i : i + batch_size]
+            inputs = tokenizer(
+                batch_prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=cfg.tokenizer.encoder_max_len,
+                return_token_type_ids=False,
+            )
+            prompt_len = inputs["input_ids"].shape[1]
+
+            # device_map="auto" 환경에서 첫 번째 파라미터 device로 이동
+            first_device = next(model.parameters()).device
+            input_ids = inputs["input_ids"].to(first_device)
+            attention_mask = inputs["attention_mask"].to(first_device)
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=cfg.inference.generate_max_length,
+                    num_beams=cfg.inference.num_beams,
+                    no_repeat_ngram_size=cfg.inference.no_repeat_ngram_size,
+                    early_stopping=cfg.inference.early_stopping,
+                    length_penalty=cfg.inference.length_penalty,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+
+            for output in outputs:
+                generated_ids = output[prompt_len:]
+                summary = tokenizer.decode(generated_ids, skip_special_tokens=True)
+                summaries.append(summary.strip())
+
+        return summaries
+
+    def run(self) -> pd.DataFrame:
+        cfg = self.cfg
+        eval_split: str = getattr(cfg.inference, "eval_split", "test")
+
+        model, tokenizer = self._load_model_and_tokenizer()
+
+        from src.data.preprocess import Preprocess
+        data_path = _resolve(cfg.general.data_path)
+
+        if eval_split == "dev":
+            return self._run_eval(model, tokenizer, data_path)
+        else:
+            return self._run_inference(model, tokenizer, data_path)
+
+    def _run_inference(self, model, tokenizer, data_path: str) -> pd.DataFrame:
+        """test.csv 추론 → prediction CSV 저장."""
+        from src.data.preprocess import Preprocess
+
+        test_data = Preprocess.make_set_as_df(
+            os.path.join(data_path, "test.csv"), is_train=False
+        )
+        prompts = self._build_prompts(test_data)
+        summaries = self._generate_summaries(model, tokenizer, prompts)
+        return self._save(summaries, test_data["fname"].tolist())
+
+    def _run_eval(self, model, tokenizer, data_path: str) -> pd.DataFrame:
+        """dev.csv 추론 후 ROUGE 점수 출력 (평가 모드)."""
+        from src.data.preprocess import Preprocess
+        from src.utils.metrics import evaluate_multi_ref
+
+        cfg = self.cfg
+        dev_data = Preprocess.make_set_as_df(os.path.join(data_path, "dev.csv"))
+        prompts = self._build_prompts(dev_data)
+        summaries = self._generate_summaries(model, tokenizer, prompts)
+
+        remove_tokens = list(cfg.inference.remove_tokens)
+        processed, _ = batch_postprocess_with_flags(summaries, remove_tokens)
+
+        references = [[ref] for ref in dev_data["summary"].tolist()]
+        use_korouge: bool = getattr(getattr(cfg, "metrics", None), "use_korouge", False)
+        scores = evaluate_multi_ref(processed, references, use_korouge=use_korouge)
+
+        print("\n" + "=" * 50)
+        print("[평가 결과] dev.csv ROUGE scores")
+        print(f"  ROUGE-1 F1 : {scores['rouge_1_f1']:.4f}")
+        print(f"  ROUGE-2 F1 : {scores['rouge_2_f1']:.4f}")
+        print(f"  ROUGE-L F1 : {scores['rouge_l_f1']:.4f}")
+        print(f"  Combined   : {scores['rouge_combined']:.4f}")
+        print("=" * 50 + "\n")
+
+        # 결과도 저장
+        result_path = _resolve(cfg.inference.result_path)
+        os.makedirs(result_path, exist_ok=True)
+        output_filename = getattr(cfg.inference, "output_filename", "output_causal_lm_eval.csv")
+        output = pd.DataFrame({"fname": dev_data["fname"].tolist(), "summary": processed})
+        out_path = os.path.join(result_path, output_filename)
+        output.to_csv(out_path, index=False)
+        print(f"Saved → {out_path}")
+        return output
+
+    def _save(self, summaries: list[str], text_ids: list[str]) -> pd.DataFrame:
+        cfg = self.cfg
+        remove_tokens = list(cfg.inference.remove_tokens)
+        processed, flags = batch_postprocess_with_flags(summaries, remove_tokens)
+
+        short_count = sum(flags)
+        if short_count > 0:
+            print(f"[경고] {short_count}/{len(processed)}개 요약문이 최소 길이 미달 (재생성 권장)")
+
+        result_path = _resolve(cfg.inference.result_path)
+        os.makedirs(result_path, exist_ok=True)
+        output_filename = getattr(cfg.inference, "output_filename", "output_causal_lm.csv")
         output = pd.DataFrame({"fname": text_ids, "summary": processed})
         out_path = os.path.join(result_path, output_filename)
         output.to_csv(out_path, index=False)
@@ -402,14 +591,17 @@ class SolarAPIInferencer:
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
-    # inference_type: solar_api 플래그로 명시적 분기 (없으면 model_name 폴백)
+    architecture = getattr(cfg.model, "architecture", "bart")
     inference_type = getattr(cfg.inference, "inference_type", None)
+
     if inference_type == "solar_api" or (
         inference_type is None
         and hasattr(cfg.inference, "model_name")
         and "solar" in str(getattr(cfg.inference, "model_name", "")).lower()
     ):
         SolarAPIInferencer(cfg).run()
+    elif architecture == "causal_lm":
+        CausalLMInferencer(cfg).run()
     else:
         Seq2SeqInferencer(cfg).run()
 

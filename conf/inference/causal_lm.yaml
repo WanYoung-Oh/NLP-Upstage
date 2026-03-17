@@ -1,0 +1,20 @@
+defaults:
+  - beam4
+
+# causal LM 특화 설정 (SOLAR QLoRA)
+num_beams: 4
+no_repeat_ngram_size: 3
+early_stopping: true
+length_penalty: 1.2
+generate_max_length: 150   # causal LM은 새로 생성되는 토큰 수 (max_new_tokens)
+batch_size: 4              # 10.7B 모델 메모리 고려
+
+remove_tokens: []          # causal LM은 skip_special_tokens=True로 처리
+
+ckt_path: "checkpoints/best_model"
+result_path: "./prediction/"
+output_filename: "output_causal_lm.csv"
+
+# eval_split: "test" → test.csv 추론 (제출용)
+#             "dev"  → dev.csv 추론 후 ROUGE 평가
+eval_split: "test"

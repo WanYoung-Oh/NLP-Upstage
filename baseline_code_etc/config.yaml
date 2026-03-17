@@ -1,10 +1,10 @@
 general:
   data_path: ../data/
   model_name: digit82/kobart-summarization
-  output_dir: ./
+  output_dir: ../outputs/
 inference:
   batch_size: 32
-  ckt_path: model ckt path
+  ckt_path: ../checkpoints/
   early_stopping: true
   generate_max_length: 100
   no_repeat_ngram_size: 2
@@ -14,7 +14,7 @@ inference:
   - <s>
   - </s>
   - <pad>
-  result_path: ./prediction/
+  result_path: ../prediction/
 tokenizer:
   bos_token: <s>
   decoder_max_len: 100
@@ -38,7 +38,7 @@ training:
   gradient_accumulation_steps: 1
   learning_rate: 1.0e-05
   load_best_model_at_end: true
-  logging_dir: ./logs
+  logging_dir: ../logs
   logging_strategy: epoch
   lr_scheduler_type: cosine
   num_train_epochs: 20
@@ -54,6 +54,6 @@ training:
   warmup_ratio: 0.1
   weight_decay: 0.01
 wandb:
-  entity: wandb_repo
-  name: run_name
-  project: project_name
+  entity: owy007-
+  name: baseline001
+  project: dialogue_summarization

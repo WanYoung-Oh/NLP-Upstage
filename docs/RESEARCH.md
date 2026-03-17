@@ -571,3 +571,190 @@ python src/train.py \
 ### 대회 제공 베이스라인 성능
 - KoBART fine-tuning: **ROUGE-F1 47.1244** (public 250개 기준)
 - 학습 시간: 약 21분 (Stages GPU), 추론 시간: 약 13초
+
+---
+
+## 13. Topic 정보 활용 전략 (신규 분석)
+
+> **작성일**: 2026-03-16
+> **배경**: train/dev의 `topic` 컬럼을 요약 품질 향상에 활용하는 방법론 검토
+
+---
+
+### 13.1 데이터 실태 분석
+
+먼저 활용 방법을 결정하기 전에 topic 컬럼의 실제 특성을 파악해야 합니다.
+
+| 항목 | 수치 |
+|------|------|
+| train 전체 레코드 | 12,457개 |
+| 고유 topic 수 | **9,235개** (전체의 74%) |
+| 1회만 등장하는 topic | **8,041개** (전체의 65%) |
+| 2회 이상 등장하는 topic | 1,194개 |
+| dev 고유 topic 수 | 475개 (dev 499건 중) |
+| **test.csv의 topic 컬럼** | **없음** ← 핵심 제약 |
+
+상위 빈도 topic (중복 등장 10회 이상):
+```
+음식 주문(130), 취업 면접(109), 길 안내(66), 호텔 체크인(40),
+아파트 임대(30), 일상 대화(29), 쇼핑(27), 주말 계획(26), ...
+```
+
+**핵심 결론**:
+1. topic은 **고정된 분류 체계가 아닌 자유형 텍스트 레이블**이다. "베를린행 비행기 티켓 구매", "James Dean의 전기"처럼 고유한 설명이 대부분이다.
+2. **test.csv에 topic이 없다** → inference 시 topic 정보를 외부에서 주입하거나 모델이 스스로 추론해야 한다.
+3. 전통적인 N-class 분류기 접근법은 9,235개 레이블 중 65%가 단 1회 등장하므로 직접 적용 불가능하다.
+
+---
+
+### 13.2 관련 연구 요약
+
+topic 정보를 요약 모델에 활용하는 것은 활발히 연구된 분야이며, 일관되게 ROUGE 향상이 보고됩니다.
+
+#### 핵심 논문
+
+| 논문 | 발표 | 방법 | 결과 |
+|------|------|------|------|
+| Lin et al. (2023) "Topic-Oriented Dialogue Summarization" (TODS) | IEEE/ACM TASLP | BART에 topic 식별·attention 제한·topic-summary 구별 3가지 보조 태스크 추가 | BART-base +1.06 ROUGE-2, +0.97 ROUGE-L; BART-large +1.43 ROUGE-L |
+| Liu et al. (2021) "Topic-Aware Contrastive Learning for Abstractive Dialogue Summarization" | EMNLP Findings | topic 경계를 보조 태스크(대조 학습)로 활용 | DialogSum 벤치마크 당시 SOTA |
+| You & Ko (2023) "Topic-Informed Dialogue Summarization using Topic Distribution and Prompt-based Modeling" | EMNLP Findings | **비지도 topic 분포 추정** 후 인코더/디코더 hidden state에 soft prompt로 주입 → **test 시 topic 레이블 불필요** | SAMSum + DialogSum SOTA |
+| Passali et al. (2022) "Topic-Controllable Summarization" | arXiv 2206.04317 | control token 앞에 붙이기(prepend) vs 임베딩 주입 비교 | **Prepend 방식이 임베딩 주입보다 빠르고 성능 우수** |
+| TCS_WITM_2022 (DialogSum Challenge) | ACL INLG 2022 | PEGASUS에 topic prefix 붙이기 (gold topic 사용) | ROUGE-1 50.32 달성 |
+
+**ROUGE 향상 기대치** (문헌 기준):
+- Prepend 방식: +0.5 ~ +1.5 ROUGE-1
+- Multi-task 방식: +1.0 ~ +2.0 ROUGE-2
+
+---
+
+### 13.3 세 가지 접근 방법 비교
+
+#### 방법 A: Topic을 입력에 직접 prepend (즉시 적용 가능)
+
+```
+[학습 시 encoder 입력]
+"[TOPIC] 음식 주문 [SEP]\n#Person1#: ..."
+
+[Causal LM (SOLAR) 프롬프트]
+"[INST] 주제: 음식 주문\n다음 대화를 한국어로 요약하세요:\n{dialogue}\n[/INST]\n"
+```
+
+**장점**:
+- 모델 구조 변경 없이 현재 seq2seq/causal_lm 파이프라인에 바로 적용 가능
+- T5의 prefix 설계 철학과 완전히 일치, BART도 동일하게 적용 가능
+- Passali et al. (2022)에서 embedding 주입보다 빠르고 성능도 우수함이 실증됨
+- 구현 난이도 최저
+
+**단점 (핵심 제약)**:
+- **test.csv에 topic이 없으므로, 추론 시 topic을 blank로 두거나 별도 예측 필요**
+- 학습(topic 있음)과 추론(topic 없음) 간 도메인 불일치 발생 가능
+- 이 불일치를 해결하지 않으면 효과가 반감될 수 있음
+
+**도메인 불일치 완화 방법**:
+- 학습 시 topic을 일정 비율(20~30%)로 랜덤 mask 처리 (`[TOPIC] [MASK]`) → 모델이 topic 없이도 작동하도록 regularization
+- 추론 시 아래 방법 B나 C로 topic을 예측하여 주입
+
+---
+
+#### 방법 B: topic 클러스터링 후 분류기 학습 (2단계 파이프라인)
+
+9,235개의 자유형 topic 텍스트를 먼저 소수의 macro 카테고리로 클러스터링한 뒤, 분류기를 학습하는 방법입니다.
+
+**단계**:
+1. **Clustering**: 한국어 sentence encoder (예: klue/roberta-base 또는 multilingual-e5)로 topic 텍스트를 임베딩 → K-Means/계층적 클러스터링으로 20~50개 macro category로 압축
+   - 예: "음식 주문", "패스트푸드 주문", "식당 예약" → "음식/식당" 클러스터
+2. **Classifier 학습**: dialogue → macro category를 예측하는 소형 분류기(KoELECTRA or klue/bert) 학습
+3. **추론 파이프라인**: dialogue → 분류기 예측 macro category → 방법 A와 동일하게 prefix로 붙여서 요약 생성
+
+**장점**:
+- test 시 topic 레이블 불필요, 자동 예측
+- 분류기와 요약 모델을 완전히 분리해서 관리 가능
+- 클러스터 수 조절로 granularity 조정 가능
+
+**단점**:
+- 모델이 2개(분류기 + 요약기): 추론 지연 및 운영 복잡도 증가
+- 클러스터링 품질이 파이프라인 전체 성능에 영향 (노이즈 전파)
+- gold topic과 predicted topic 간 성능 차이(oracle gap) 존재 — DialogSum Challenge에서 gold topic 사용 팀과 predicted topic 사용 팀 간 눈에 띄는 점수 차이가 보고됨
+
+---
+
+#### 방법 C: 비지도 Topic 분포 추정 + Soft Prompt 주입 (가장 정교)
+
+You & Ko (EMNLP 2023) 방법을 따라, 별도의 topic 레이블 없이 dialogue 텍스트에서 직접 topic 분포를 추정하여 모델에 주입합니다.
+
+**흐름**:
+1. LDA 또는 Neural Topic Model (NTM)로 dialogue corpus에서 topic 분포 학습 (비지도)
+2. 각 dialogue의 topic 분포 벡터를 encoder/decoder hidden state에 soft prompt로 추가
+3. 학습/추론 모두 동일한 파이프라인 — topic 레이블 불필요
+
+**장점**:
+- train/test 모두 동일한 방법으로 처리 → 도메인 불일치 없음
+- gold topic 레이블에 의존하지 않음
+- You & Ko (2023): SAMSum + DialogSum에서 SOTA 달성
+
+**단점**:
+- 구현 복잡도 최고 (Topic Model + Trainer 아키텍처 수정 + soft prompt 통합)
+- 현재 Hydra 파이프라인에 통합하려면 `summarizer.py`의 모델 로드 로직과 `train.py`의 Trainer 설정 대폭 수정 필요
+- 현재 대회 잔여 기간 대비 ROI(투자 대비 수익)가 낮을 수 있음
+
+---
+
+### 13.4 방법별 비교 요약
+
+| 항목 | 방법 A (Prepend) | 방법 B (클러스터링+분류기) | 방법 C (비지도 Topic 분포) |
+|------|-----------------|--------------------------|--------------------------|
+| 구현 난이도 | ★ (최저) | ★★★ | ★★★★★ (최고) |
+| test 시 topic 필요 여부 | 필요 (별도 해결 필요) | **불필요** (분류기 예측) | **불필요** (비지도 추정) |
+| 모델 구조 변경 | 없음 | 없음 (분리된 분류기) | 있음 (hidden state 주입) |
+| 기대 ROUGE 향상 | +0.5~+1.5 | +0.5~+1.5 (oracle gap 포함 시 낮아질 수 있음) | +1.0~+2.0 |
+| 운영 복잡도 | 낮음 | 중간 (모델 2개) | 높음 |
+| 논문 근거 | Passali 2022, TCS_WITM 2022 | Lin 2023 (부분) | You & Ko 2023 |
+
+---
+
+### 13.5 이 프로젝트에 대한 권장 순서
+
+**현재 프로젝트 제약 고려**:
+- test.csv에 topic 없음
+- 현재 파이프라인은 seq2seq(BART/T5) + causal_lm(SOLAR QLoRA)
+- 대회 기간 내 구현 가능성 중시
+
+**추천 순서**:
+
+1. **[1순위] 방법 A + 학습 시 topic masking 적용**
+   - 구현: `src/data/preprocess.py`의 `make_input()` 에서 encoder 입력에 `[TOPIC] {topic} [SEP]\n`를 prepend
+   - 추가로 학습 시 topic을 25% 확률로 `[TOPIC] [MASK]`로 교체 → 추론 시 `[TOPIC] [MASK]`로 실행
+   - 이렇게 하면 도메인 불일치를 최소화하면서 topic 정보를 활용 가능
+   - SOLAR 프롬프트도 동일: `"주제: {topic}\n"` 또는 topic 없을 때 `"주제: 알 수 없음\n"` 대체
+   - **효과 검증 기준**: dev ROUGE가 현재 대비 +0.3 이상이면 채택
+
+2. **[2순위] 방법 B — 클러스터 기반 macro topic 예측 파이프라인**
+   - 1순위로 효과가 확인된 경우에만 진행
+   - klue/roberta로 dialogue → macro category(약 30개) 분류기 학습
+   - 추론 시 분류 결과를 prefix로 사용
+
+3. **[3순위] 방법 C**
+   - 대회 기간 내 구현 현실적으로 어려움
+   - 장기 연구 주제로 분류
+
+---
+
+### 13.6 현재 파이프라인 영향 범위 (구현 시 수정 대상)
+
+| 파일 | 수정 내용 |
+|------|----------|
+| `src/data/preprocess.py` | `make_input()` — encoder 입력에 topic prefix 추가 옵션 |
+| `train.py` (`_build_causal_lm_dataset()`) | SOLAR 프롬프트에 topic 추가 |
+| `conf/config.yaml` | `data.use_topic: false` 플래그 추가 |
+| `src/inference.py` | test 시 topic 없음 → `[MASK]` 또는 빈 문자열 처리 |
+
+---
+
+### 13.7 참고 문헌
+
+- Lin, H. et al. (2023). "Topic-Oriented Dialogue Summarization." *IEEE/ACM TASLP*, Vol. 31, pp. 1797–1810. [GitHub](https://github.com/xiaolinAndy/TODS)
+- Liu, J. et al. (2021). "Topic-Aware Contrastive Learning for Abstractive Dialogue Summarization." *EMNLP 2021 Findings*. [arXiv:2109.04994](https://arxiv.org/abs/2109.04994) [GitHub](https://github.com/Junpliu/ConDigSum)
+- You, W. & Ko, Y. (2023). "Topic-Informed Dialogue Summarization using Topic Distribution and Prompt-based Modeling." *EMNLP 2023 Findings*. [ACL Anthology](https://aclanthology.org/2023.findings-emnlp.376/)
+- Passali, T. et al. (2022). "Topic-Controllable Summarization: Topic-Aware Evaluation and Transformer Methods." [arXiv:2206.04317](https://arxiv.org/abs/2206.04317)
+- TCS_WITM (2022). "Topic oriented Summarization using Transformer based Encoder Decoder Model." *ACL INLG 2022 DialogSum Challenge*. [ACL Anthology](https://aclanthology.org/2022.inlg-genchal.15/)
+- Chen, Y. et al. (2021). "DialogSum: A Real-life Scenario Dialogue Summarization Dataset." *ACL 2021 Findings*. [arXiv:2105.06762](https://arxiv.org/abs/2105.06762)

@@ -9,9 +9,13 @@ Phase 3: 데이터 증강 모듈.
 from __future__ import annotations
 
 import os
+import re
 import time
 import pandas as pd
 from tqdm import tqdm
+
+# 대화에서 화자 토큰을 분리하는 패턴: #Person1#, #Person2#, ... 등
+_SPEAKER_PATTERN = re.compile(r"(#\w+#:?\s*)")
 
 
 # ---------------------------------------------------------------------------
@@ -32,12 +36,23 @@ class BackTranslationAugmenter:
 
     def augment(self, text: str, delay: float = 0.3) -> str:
         try:
-            to_pivot = self._GoogleTranslator(source=self.src, target=self.pivot)
-            en = to_pivot.translate(text)
-            time.sleep(delay)
-            to_src = self._GoogleTranslator(source=self.pivot, target=self.src)
-            ko = to_src.translate(en)
-            return ko
+            # 화자 토큰(#Person1#: 등)을 기준으로 분리하여 발화 내용에만 번역 적용
+            parts = _SPEAKER_PATTERN.split(text)
+            result_parts: list[str] = []
+            for part in parts:
+                if _SPEAKER_PATTERN.fullmatch(part) or not part.strip():
+                    # 화자 토큰과 빈 문자열은 원본 그대로 유지
+                    result_parts.append(part)
+                else:
+                    # 발화 내용만 ko → en → ko 번역
+                    to_pivot = self._GoogleTranslator(source=self.src, target=self.pivot)
+                    en = to_pivot.translate(part)
+                    time.sleep(delay)
+                    to_src = self._GoogleTranslator(source=self.pivot, target=self.src)
+                    ko = to_src.translate(en)
+                    time.sleep(delay)
+                    result_parts.append(ko)
+            return "".join(result_parts)
         except Exception:
             return text  # 실패 시 원본 반환
 
@@ -49,7 +64,7 @@ class BackTranslationAugmenter:
 class EdaAugmenter:
     """nlpaug를 이용한 EDA/AEDA 텍스트 증강."""
 
-    def __init__(self, aug_p: float = 0.1) -> None:
+    def __init__(self, aug_p: float = 0.05) -> None:
         try:
             import nlpaug.augmenter.word as naw  # type: ignore
         except ImportError as e:
@@ -58,8 +73,21 @@ class EdaAugmenter:
 
     def augment(self, text: str) -> str:
         try:
-            result = self.aug.augment(text)
-            return result[0] if isinstance(result, list) else result
+            # 화자 토큰(#Person1#: 등)을 기준으로 분리
+            # split 결과는 [비화자, 화자토큰, 발화내용, 화자토큰, 발화내용, ...] 형태
+            parts = _SPEAKER_PATTERN.split(text)
+            result_parts: list[str] = []
+            for part in parts:
+                if _SPEAKER_PATTERN.fullmatch(part):
+                    # 화자 토큰은 원본 그대로 유지
+                    result_parts.append(part)
+                elif part.strip():
+                    # 실제 발화 내용에만 EDA 적용
+                    aug = self.aug.augment(part)
+                    result_parts.append(aug[0] if isinstance(aug, list) else aug)
+                else:
+                    result_parts.append(part)
+            return "".join(result_parts)
         except Exception:
             return text
 
@@ -108,11 +136,10 @@ def augment_dataset(
             score = 0.0
 
         if score >= rouge_threshold:
-            augmented_rows.append({
-                "fname": row["fname"] + "_aug",
-                "dialogue": aug_dialogue,
-                "summary": row["summary"],
-            })
+            aug_row = row.to_dict()
+            aug_row["fname"] = str(row["fname"]) + "_aug"
+            aug_row["dialogue"] = aug_dialogue
+            augmented_rows.append(aug_row)
 
     aug_df = pd.DataFrame(augmented_rows)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

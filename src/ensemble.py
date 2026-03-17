@@ -119,8 +119,8 @@ def _find_best_checkpoint(checkpoint_root: str) -> str | None:
     BestCheckpointCallback 저장 규칙:
         {checkpoints_root}/{yymmdd_run_NNN}/epoch{##}_{score:.4f}
 
-    train.py는 general.checkpoints_root 아래에 run_id 디렉토리를 생성하므로,
-    이 함수는 한 단계 더 내려가 run_id 하위에서 epoch 폴더를 탐색합니다.
+    causal_lm 모델도 eval_loss → 1/(1+loss) 변환 후 동일한 형식으로 저장되므로
+    seq2seq와 동일한 패턴으로 탐색합니다.
     """
     import re
 
@@ -141,6 +141,120 @@ def _find_best_checkpoint(checkpoint_root: str) -> str | None:
                     best_score = score
                     best_path = os.path.join(run_dir, name)
     return best_path
+
+
+def list_checkpoints(checkpoint_root: str, run_id: str | None = None) -> list[dict]:
+    """
+    체크포인트 목록을 반환합니다.
+
+    Args:
+        checkpoint_root: checkpoints/ 루트 디렉토리
+        run_id: 특정 run만 조회 (예: "260314_run_005"). None이면 전체 조회.
+
+    Returns:
+        체크포인트 정보 dict 리스트. 각 항목:
+            {"run_id": str, "epoch": int, "score": float, "path": str}
+        score 내림차순 정렬.
+
+    Note:
+        score는 seq2seq의 경우 ROUGE combined, causal_lm의 경우
+        1/(1+eval_loss) 변환값입니다. 두 경우 모두 "높을수록 좋음".
+    """
+    import re
+
+    run_pattern = re.compile(r"^\d{6}_run_\d+$")
+    epoch_pattern = re.compile(r"^epoch(\d+)_([\d.]+)$")
+    results: list[dict] = []
+
+    if not os.path.isdir(checkpoint_root):
+        return results
+
+    for run_dir_name in sorted(os.listdir(checkpoint_root)):
+        if not run_pattern.match(run_dir_name):
+            continue
+        if run_id is not None and run_dir_name != run_id:
+            continue
+        run_dir = os.path.join(checkpoint_root, run_dir_name)
+        if not os.path.isdir(run_dir):
+            continue
+        for name in os.listdir(run_dir):
+            m = epoch_pattern.match(name)
+            if m:
+                results.append({
+                    "run_id": run_dir_name,
+                    "epoch": int(m.group(1)),
+                    "score": float(m.group(2)),
+                    "path": os.path.join(run_dir, name),
+                })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results
+
+
+def select_checkpoints_for_ensemble(
+    checkpoint_root: str,
+    run_ids: list[str] | None = None,
+    top_k_per_run: int = 1,
+    min_score: float = 0.0,
+) -> list[str]:
+    """
+    앙상블용 체크포인트 경로 목록을 반환합니다.
+
+    Args:
+        checkpoint_root: checkpoints/ 루트 디렉토리
+        run_ids: 포함할 run_id 목록. None이면 전체 run 대상.
+        top_k_per_run: 각 run에서 score 상위 k개 선택.
+        min_score: 이 점수 미만인 체크포인트는 제외.
+
+    Returns:
+        체크포인트 경로 문자열 리스트 (score 내림차순).
+
+    Examples:
+        # 특정 run들의 best 체크포인트로 앙상블
+        paths = select_checkpoints_for_ensemble(
+            "checkpoints",
+            run_ids=["260314_run_005", "260314_run_003", "260316_run_003"],
+        )
+
+        # 전체 run에서 상위 1개씩 수집, ROUGE 0.75 이상만
+        paths = select_checkpoints_for_ensemble(
+            "checkpoints",
+            top_k_per_run=1,
+            min_score=0.75,
+        )
+
+        # 특정 run에서 상위 3개 체크포인트 앙상블
+        paths = select_checkpoints_for_ensemble(
+            "checkpoints",
+            run_ids=["260314_run_005"],
+            top_k_per_run=3,
+        )
+    """
+    target_runs = run_ids if run_ids is not None else [None]  # type: ignore[list-item]
+    # run_ids=None 이면 전체 탐색
+    if run_ids is None:
+        all_ckpts = list_checkpoints(checkpoint_root)
+    else:
+        all_ckpts = []
+        for rid in run_ids:
+            all_ckpts.extend(list_checkpoints(checkpoint_root, run_id=rid))
+
+    # min_score 필터
+    all_ckpts = [c for c in all_ckpts if c["score"] >= min_score]
+
+    # run_id별로 그룹핑하여 top_k_per_run 적용
+    from collections import defaultdict
+    run_map: dict[str, list[dict]] = defaultdict(list)
+    for c in all_ckpts:
+        run_map[c["run_id"]].append(c)
+
+    selected: list[dict] = []
+    for ckpts in run_map.values():
+        ckpts_sorted = sorted(ckpts, key=lambda x: x["score"], reverse=True)
+        selected.extend(ckpts_sorted[:top_k_per_run])
+
+    selected.sort(key=lambda x: x["score"], reverse=True)
+    return [c["path"] for c in selected]
 
 
 class GroupKFoldTrainer:

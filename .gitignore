@@ -27,7 +27,6 @@ predictions/
 results/
 submissions/
 
-
 # ==================================================
 # WandB
 # ==================================================
@@ -198,4 +197,4 @@ optuna.db
 # baseline_code_etc
 # ==================================================
 baseline_code_etc/
-
+baseline_code_etc/images/

@@ -10,11 +10,36 @@
 from __future__ import annotations
 
 import os
+import random
 import re
 
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+
+# ---------------------------------------------------------------------------
+# Topic prefix (방법 A, RESEARCH.md §13)
+# ---------------------------------------------------------------------------
+
+_TOPIC_MASK = "[MASK]"
+
+
+def build_topic_prefix(topic: str, mask_prob: float = 0.0) -> str:
+    """topic을 '[TOPIC] ... [SEP]\\n' 형식의 encoder prefix로 변환합니다.
+
+    Args:
+        topic: 대화 주제 문자열.
+        mask_prob: 이 확률로 topic 을 [MASK] 로 대체합니다.
+            학습 시 0.25 권장, 검증/추론 시 0.0.
+
+    Returns:
+        "[TOPIC] {topic} [SEP]\\n" 또는 "[TOPIC] [MASK] [SEP]\\n"
+    """
+    if not topic or topic in ("nan", _TOPIC_MASK):
+        return f"[TOPIC] {_TOPIC_MASK} [SEP]\n"
+    if mask_prob > 0.0 and random.random() < mask_prob:
+        return f"[TOPIC] {_TOPIC_MASK} [SEP]\n"
+    return f"[TOPIC] {topic} [SEP]\n"
 
 
 # ---------------------------------------------------------------------------
@@ -27,15 +52,20 @@ def clean_text(text: str) -> str:
 
     Phase 3에서 Preprocess.make_set_as_df() 호출 이후 적용.
     """
-    # 단독 자음/모음 연속 제거 (가-힣 완성형 음절·알파벳·숫자·# 에 인접하지 않은 것)
-    # \w 는 한글 자모도 포함하므로 [가-힣A-Za-z0-9] 로 명시
-    text = re.sub(r"(?<![#가-힣A-Za-z0-9])[ㄱ-ㅎㅏ-ㅣ]+(?![#가-힣A-Za-z0-9])", " ", text)
-    # 빈 괄호
+    # 1. 자음/모음 제거 (단, 해시태그 뒤의 자음은 유지하고 싶다면 (?<!#) 추가)
+    # "이거ㅋㅋ"도 지우려면 전후방 탐색을 완전히 제거하거나 조절해야 합니다.
+    text = re.sub(r"[ㄱ-ㅎㅏ-ㅣ]+", " ", text)
+
+    # 2. 내용 없는 빈 괄호 제거 ( (), [], {} : 실제 데이터를 확인해 보니 해당 사항은 없는 것으로 확인되나 코드는 유지하기로 결정함)
     text = re.sub(r"\(\s*\)|\[\s*\]|\{\s*\}", "", text)
-    # 반복 특수기호 (3회 이상)
+
+    # 3. 반복되는 특수기호 축약 (3회 이상 반복 시 1개로 축약, 단 #은 예외 가능)
+    # 예: !!! -> !, ??? -> ?
     text = re.sub(r"([^\w\s#])\1{2,}", r"\1", text)
-    # 다중 공백 정리
+
+    # 4. 다중 공백 정리 및 양끝 공백 제거
     text = re.sub(r"\s+", " ", text).strip()
+    
     return text
 
 
@@ -73,9 +103,9 @@ def apply_tta(dialogues: list[str], n_ways: int = 2) -> list[list[str]]:
 
 def filter_by_length(
     df: pd.DataFrame,
-    dialogue_max: int = 1500,
-    summary_min: int = 50,
-    summary_max: int = 250,
+    dialogue_max: int = 2300,  # train max 2,168, dev max 1,269, test max 2,275
+    summary_min: int = 10,     # train min 13, dev min 29
+    summary_max: int = 377,    # train max 376, dev max 283
 ) -> pd.DataFrame:
     """Phase 3: 길이 기반 이상치 필터링."""
     before = len(df)
@@ -100,7 +130,10 @@ class Preprocess:
     def make_set_as_df(file_path: str, is_train: bool = True) -> pd.DataFrame:
         df = pd.read_csv(file_path)
         if is_train:
-            return df[["fname", "dialogue", "summary"]]
+            cols = ["fname", "dialogue", "summary"]
+            if "topic" in df.columns:
+                cols.append("topic")
+            return df[cols]
         else:
             return df[["fname", "dialogue"]]
 
@@ -109,6 +142,8 @@ class Preprocess:
         dataset: pd.DataFrame,
         is_test: bool = False,
         prefix: str = "",
+        use_topic: bool = False,
+        topic_mask_prob: float = 0.0,
     ) -> tuple:
         """
         encoder/decoder 입력 생성.
@@ -117,12 +152,28 @@ class Preprocess:
             dataset: make_set_as_df() 반환값
             is_test: True이면 라벨 없이 encoder 입력만 생성
             prefix: T5 계열 모델용 prefix (예: "summarize: ")
+            use_topic: True이면 topic을 encoder 입력 앞에 prepend (방법 A)
+            topic_mask_prob: topic을 [MASK]로 대체할 확률 (학습 시 0.25 권장)
+                topic 컬럼이 없는 경우(test.csv) 항상 [MASK] 사용
 
         Returns:
             is_test=False → (encoder_input, decoder_input, decoder_output)
             is_test=True  → (encoder_input, decoder_input)
         """
-        dialogues = dataset["dialogue"].apply(lambda x: prefix + str(x))
+        if use_topic:
+            if "topic" in dataset.columns:
+                topics = dataset["topic"].fillna(_TOPIC_MASK).astype(str)
+            else:
+                topics = pd.Series([_TOPIC_MASK] * len(dataset), index=dataset.index)
+            topic_prefixes = topics.apply(
+                lambda t: build_topic_prefix(t, mask_prob=topic_mask_prob)
+            )
+            dialogues = topic_prefixes + dataset["dialogue"].apply(
+                lambda x: prefix + str(x)
+            )
+        else:
+            dialogues = dataset["dialogue"].apply(lambda x: prefix + str(x))
+
         if is_test:
             encoder_input = dialogues
             decoder_input = [self.bos_token] * len(dialogues)

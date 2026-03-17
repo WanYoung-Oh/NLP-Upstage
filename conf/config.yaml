@@ -38,6 +38,11 @@ tokenizer:
 data:
   use_cleaning: true        # true: clean_text() 적용 (Phase 3+, 단독 자음/모음·빈 괄호·반복 특수기호 제거)
   use_length_filter: true   # true: filter_by_length() 적용 (dialogue≤1500, summary 50~250자)
+  use_topic: false          # true: topic을 encoder 입력 앞에 prepend (방법 A, RESEARCH.md §13)
+                            #   seq2seq  → "[TOPIC] {topic} [SEP]\n{dialogue}"
+                            #   causal_lm→ "[INST] 주제: {topic}\n대화:\n{dialogue}\n[/INST]\n"
+                            #   학습 시 25% 확률로 topic → [MASK] 적용 (test 도메인 불일치 완화)
+                            #   추론 시 test.csv에 topic 없으므로 자동으로 [MASK] 사용
 
 metrics:
   use_korouge: false   # true로 변경하면 korouge-score 사용 (Phase 3+, Java 불필요)

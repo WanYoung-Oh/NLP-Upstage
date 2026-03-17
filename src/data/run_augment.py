@@ -26,6 +26,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.data.augment import augment_dataset
+from src.data.preprocess import clean_text, filter_by_length
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +104,15 @@ def main() -> None:
     train_df = pd.read_csv(train_path)
     print(f"[Data] 원본 train.csv: {len(train_df)}건")
 
+    # 증강 전 전처리: clean_text → filter_by_length (train.py와 동일 기준)
+    train_df = train_df.copy()
+    train_df["dialogue"] = train_df["dialogue"].apply(clean_text)
+    if "summary" in train_df.columns:
+        train_df["summary"] = train_df["summary"].apply(clean_text)
+    print("[Preprocess] clean_text 적용 완료")
+    train_df = filter_by_length(train_df)
+    print(f"[Preprocess] filter_by_length 적용 후: {len(train_df)}건")
+
     # 증강 실행
     aug_frames = run_augmentation(
         train_df,
@@ -112,8 +122,10 @@ def main() -> None:
         output_dir=output_dir,
     )
 
-    # 원본 + 증강 전체 합산
+    # 원본 + 증강 전체 합산 (컬럼 순서는 원본 train.csv 기준으로 고정)
+    original_columns = list(train_df.columns)
     combined = pd.concat([train_df, *aug_frames], ignore_index=True)
+    combined = combined[original_columns]  # 원본과 동일한 컬럼 순서·구성 보장
     combined_path = os.path.join(output_dir, "train.csv")
     combined.to_csv(combined_path, index=False)
     aug_total = len(combined) - len(train_df)

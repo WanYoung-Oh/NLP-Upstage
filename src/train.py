@@ -45,7 +45,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from src.data.preprocess import DatasetForCausalLM, DatasetForSeq2Seq, Preprocess, clean_text, filter_by_length
+from src.data.preprocess import DatasetForCausalLM, DatasetForSeq2Seq, Preprocess, build_topic_prefix, clean_text, filter_by_length, _TOPIC_MASK
 from src.models.summarizer import load_tokenizer_and_model
 from src.utils.device import get_device
 from src.utils.metrics import compute_metrics
@@ -102,18 +102,29 @@ def _next_run_id(checkpoints_root: str) -> str:
 
 
 class BestCheckpointCallback(TrainerCallback):
-    """체크포인트를 epoch{##}_{score:.4f} 형식으로 저장하고 상위 top_k개만 유지합니다."""
+    """체크포인트를 epoch{##}_{score:.4f} 형식으로 저장하고 상위 top_k개만 유지합니다.
 
-    def __init__(self, output_dir: str, top_k: int = 3):
+    architecture="causal_lm" 인 경우 eval_loss를 1/(1+loss) 로 변환해
+    "높을수록 좋음" 형식으로 통일합니다. 이렇게 하면 seq2seq와 동일한
+    _find_best_checkpoint 로직으로 앙상블 시 best 체크포인트를 선택할 수 있습니다.
+    """
+
+    def __init__(self, output_dir: str, top_k: int = 3, architecture: str = "seq2seq"):
         self.output_dir = output_dir
         self.top_k = top_k
+        self.architecture = architecture
         self._last_score: float = 0.0
         self._last_epoch: int = 0
         self._checkpoints: list[tuple[float, str]] = []
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, metrics=None, **kwargs):
         if metrics:
-            self._last_score = metrics.get("eval_rouge_combined", 0.0)
+            if self.architecture == "causal_lm":
+                # eval_loss는 낮을수록 좋으므로 1/(1+loss) 변환으로 "높을수록 좋음" 형식 통일
+                loss = metrics.get("eval_loss", 0.0)
+                self._last_score = 1.0 / (1.0 + loss)
+            else:
+                self._last_score = metrics.get("eval_rouge_combined", 0.0)
             self._last_epoch = round(state.epoch) if state.epoch else 0
 
     def on_save(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
@@ -147,11 +158,16 @@ def _build_causal_lm_dataset(
     df: pd.DataFrame,
     tokenizer,
     max_length: int,
+    use_topic: bool = False,
+    topic_mask_prob: float = 0.0,
 ) -> DatasetForCausalLM:
     """Causal LM용 Dataset 생성.
 
-    각 샘플을 "[INST] {dialogue} [/INST]\n{summary}</s>" 형태로 구성하고
-    prompt 위치의 labels는 -100으로 마스킹합니다.
+    각 샘플을 "[INST] {topic_line}다음 대화를 한국어로 요약하세요:\n{dialogue}\n[/INST]\n{summary}</s>"
+    형태로 구성하고 prompt 위치의 labels는 -100으로 마스킹합니다.
+
+    use_topic=True이면 프롬프트에 "주제: {topic}\n" 라인이 추가됩니다.
+    topic 컬럼이 없거나 topic_mask_prob 확률에 걸리면 "주제: [MASK]\n"로 대체됩니다.
     """
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     all_input_ids: list[list[int]] = []
@@ -162,7 +178,20 @@ def _build_causal_lm_dataset(
         dialogue = str(row["dialogue"])
         summary = str(row.get("summary", ""))
 
-        prompt = f"[INST] 다음 대화를 한국어로 요약하세요:\n{dialogue}\n[/INST]\n"
+        if use_topic:
+            raw_topic = str(row["topic"]) if "topic" in row.index else _TOPIC_MASK
+            if not raw_topic or raw_topic == "nan":
+                raw_topic = _TOPIC_MASK
+            # build_topic_prefix 대신 causal LM 형식("주제: ...")을 직접 구성
+            import random as _random
+            if raw_topic == _TOPIC_MASK or (topic_mask_prob > 0.0 and _random.random() < topic_mask_prob):
+                topic_line = f"주제: {_TOPIC_MASK}\n"
+            else:
+                topic_line = f"주제: {raw_topic}\n"
+        else:
+            topic_line = ""
+
+        prompt = f"[INST] {topic_line}다음 대화를 한국어로 요약하세요:\n{dialogue}\n[/INST]\n"
         response = summary + tokenizer.eos_token
 
         prompt_ids: list[int] = tokenizer.encode(prompt, add_special_tokens=True)
@@ -209,6 +238,7 @@ def _prepare_causal_lm_datasets(
     data_cfg = getattr(cfg, "data", None)
     use_cleaning: bool = getattr(data_cfg, "use_cleaning", False) if data_cfg else False
     use_length_filter: bool = getattr(data_cfg, "use_length_filter", False) if data_cfg else False
+    use_topic: bool = getattr(data_cfg, "use_topic", False) if data_cfg else False
     max_length: int = cfg.tokenizer.encoder_max_len + cfg.tokenizer.decoder_max_len
 
     train_df = Preprocess.make_set_as_df(os.path.join(data_path, "train.csv"))
@@ -226,6 +256,9 @@ def _prepare_causal_lm_datasets(
 
     train_df = _apply_preprocessing(train_df)
 
+    if use_topic:
+        print("[Topic] use_topic=True — 학습 시 topic_mask_prob=0.25 적용")
+
     if use_all_data:
         val_df = Preprocess.make_set_as_df(os.path.join(data_path, "dev.csv"))
         val_df = _apply_preprocessing(val_df)
@@ -236,7 +269,10 @@ def _prepare_causal_lm_datasets(
             f"  train={len(train_df)}건 (train+dev 합산), eval 비활성화\n"
             + "=" * 60 + "\n"
         )
-        return _build_causal_lm_dataset(train_df, tokenizer, max_length), None
+        return _build_causal_lm_dataset(
+            train_df, tokenizer, max_length,
+            use_topic=use_topic, topic_mask_prob=0.25,
+        ), None
 
     val_df = Preprocess.make_set_as_df(os.path.join(data_path, "dev.csv"))
     if use_cleaning:
@@ -245,8 +281,15 @@ def _prepare_causal_lm_datasets(
         if "summary" in val_df.columns:
             val_df["summary"] = val_df["summary"].apply(clean_text)
 
-    train_dataset = _build_causal_lm_dataset(train_df, tokenizer, max_length)
-    val_dataset = _build_causal_lm_dataset(val_df, tokenizer, max_length)
+    # 학습: topic_mask_prob=0.25 / 검증: 0.0 (실제 topic으로 eval)
+    train_dataset = _build_causal_lm_dataset(
+        train_df, tokenizer, max_length,
+        use_topic=use_topic, topic_mask_prob=0.25,
+    )
+    val_dataset = _build_causal_lm_dataset(
+        val_df, tokenizer, max_length,
+        use_topic=use_topic, topic_mask_prob=0.0,
+    )
     print(f"[Data] train={len(train_dataset)}, val={len(val_dataset)}")
     return train_dataset, val_dataset
 
@@ -274,6 +317,7 @@ def _prepare_datasets(
     data_cfg = getattr(cfg, "data", None)
     use_cleaning: bool = getattr(data_cfg, "use_cleaning", False) if data_cfg else False
     use_length_filter: bool = getattr(data_cfg, "use_length_filter", False) if data_cfg else False
+    use_topic: bool = getattr(data_cfg, "use_topic", False) if data_cfg else False
 
     def _apply_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
         """config 플래그에 따라 클리닝·길이 필터를 순서대로 적용합니다."""
@@ -289,6 +333,9 @@ def _prepare_datasets(
 
     train_df = preprocessor.make_set_as_df(os.path.join(data_path, "train.csv"))
     train_df = _apply_preprocessing(train_df)
+
+    if use_topic:
+        print("[Topic] use_topic=True — 학습 시 topic_mask_prob=0.25 적용")
 
     enc_max = cfg.tokenizer.encoder_max_len
     dec_max = cfg.tokenizer.decoder_max_len
@@ -311,7 +358,9 @@ def _prepare_datasets(
             "  ※ Early stopping·eval 지표가 모두 비활성화됩니다\n"
             + "=" * 60 + "\n"
         )
-        enc_train, dec_in_train, dec_out_train = preprocessor.make_input(train_df, prefix=prefix)
+        enc_train, dec_in_train, dec_out_train = preprocessor.make_input(
+            train_df, prefix=prefix, use_topic=use_topic, topic_mask_prob=0.25,
+        )
         train_dataset = DatasetForSeq2Seq(
             tokenizer(enc_train, truncation=True, max_length=enc_max, **tok_kw),
             tokenizer(dec_in_train, truncation=True, max_length=dec_max, **tok_kw),
@@ -326,8 +375,13 @@ def _prepare_datasets(
         val_df["dialogue"] = val_df["dialogue"].apply(clean_text)
         if "summary" in val_df.columns:
             val_df["summary"] = val_df["summary"].apply(clean_text)
-    enc_train, dec_in_train, dec_out_train = preprocessor.make_input(train_df, prefix=prefix)
-    enc_val, dec_in_val, dec_out_val = preprocessor.make_input(val_df, prefix=prefix)
+    # 학습: topic_mask_prob=0.25 / 검증: 0.0 (실제 topic으로 eval)
+    enc_train, dec_in_train, dec_out_train = preprocessor.make_input(
+        train_df, prefix=prefix, use_topic=use_topic, topic_mask_prob=0.25,
+    )
+    enc_val, dec_in_val, dec_out_val = preprocessor.make_input(
+        val_df, prefix=prefix, use_topic=use_topic, topic_mask_prob=0.0,
+    )
 
     train_dataset = DatasetForSeq2Seq(
         tokenizer(enc_train, truncation=True, max_length=enc_max, **tok_kw),
@@ -461,7 +515,7 @@ def main(cfg: DictConfig) -> None:
                         early_stopping_patience=cfg.training.early_stopping_patience,
                         early_stopping_threshold=cfg.training.early_stopping_threshold,
                     ),
-                    BestCheckpointCallback(output_dir=output_dir, top_k=3),
+                    BestCheckpointCallback(output_dir=output_dir, top_k=3, architecture="causal_lm"),
                 ],
             )
     elif use_all_data:

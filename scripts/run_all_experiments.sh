@@ -12,6 +12,14 @@
 set -e
 cd "$(dirname "$(dirname "$(realpath "$0")")")"
 
+# .env 파일 자동 로드
+if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
 LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 
@@ -59,9 +67,9 @@ run_phase2() {
     log "=== Phase 2: 모델 업그레이드 ==="
 
     # 2-1. KoT5
-    log "[Phase2] KoT5-summarization 학습"
-    python src/train.py model=kot5 training=baseline \
-        2>&1 | tee "$LOG_DIR/phase2_kot5.log"
+    # log "[Phase2] KoT5-summarization 학습"
+    # python src/train.py model=kot5 training=baseline \
+    #     2>&1 | tee "$LOG_DIR/phase2_kot5.log"
 
     # 2-2. kobart-v2
     log "[Phase2] kobart-base-v2 학습"
@@ -69,14 +77,14 @@ run_phase2() {
         2>&1 | tee "$LOG_DIR/phase2_kobart_v2.log"
 
     # 2-3. pko-T5-large
-    log "[Phase2] pko-T5-large 학습"
-    python src/train.py model=pko_t5 training=full \
-        2>&1 | tee "$LOG_DIR/phase2_pko_t5.log"
+    # log "[Phase2] pko-T5-large 학습"
+    # python src/train.py model=pko_t5 training=full \
+    #     2>&1 | tee "$LOG_DIR/phase2_pko_t5.log"
 
     # 2-4. Hydra sweep (3모델 동시)
-    log "[Phase2] Hydra sweep: kobart, kot5, pko_t5"
-    python src/train.py -m model=kobart,kot5,pko_t5 training=baseline \
-        2>&1 | tee "$LOG_DIR/phase2_sweep.log"
+    # log "[Phase2] Hydra sweep: kobart, kot5, pko_t5"
+    # python src/train.py -m model=kobart,kot5,pko_t5 training=baseline \
+    #     2>&1 | tee "$LOG_DIR/phase2_sweep.log"
 
     # (선택) SOLAR QLoRA — 고사양 GPU 필요
     # python src/train.py model=solar_qlora training=qlora \
@@ -108,7 +116,7 @@ run_phase3() {
     # 3-2. 클리닝 + 필터 활성화로 재학습
     log "[Phase3] 클리닝+필터 활성화 학습"
     python src/train.py \
-        model=kot5 \
+        model=kobart_v2 \
         training=full \
         data.use_cleaning=true \
         data.use_length_filter=true \
@@ -117,7 +125,7 @@ run_phase3() {
     # 3-3. 증강 데이터로 학습 (EDA)
     log "[Phase3] EDA 증강 데이터로 학습"
     python src/train.py \
-        model=kot5 \
+        model=kobart_v2 \
         training=full \
         general.data_path=data_aug \
         2>&1 | tee "$LOG_DIR/phase3_aug_train.log"
@@ -132,7 +140,7 @@ print(find_best_checkpoint() or '')
     BEST_EPOCHS=$(basename "$BEST_CKT" | grep -oP '(?<=epoch)\d+')
     log "[Phase3] best epoch: $BEST_EPOCHS"
     python src/train.py \
-        model=kot5 \
+        model=kobart_v2 \
         training=full \
         training.use_all_data=true \
         training.num_train_epochs="$BEST_EPOCHS" \

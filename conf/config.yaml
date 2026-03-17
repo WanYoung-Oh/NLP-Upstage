@@ -36,8 +36,8 @@ tokenizer:
     - "#Email#"
 
 data:
-  use_cleaning: false        # true: clean_text() 적용 (Phase 3+, 단독 자음/모음·빈 괄호·반복 특수기호 제거)
-  use_length_filter: false   # true: filter_by_length() 적용 (dialogue≤1500, summary 50~250자)
+  use_cleaning: true        # true: clean_text() 적용 (Phase 3+, 단독 자음/모음·빈 괄호·반복 특수기호 제거)
+  use_length_filter: true   # true: filter_by_length() 적용 (dialogue≤1500, summary 50~250자)
 
 metrics:
   use_korouge: false   # true로 변경하면 korouge-score 사용 (Phase 3+, Java 불필요)

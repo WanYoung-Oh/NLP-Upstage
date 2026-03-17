@@ -240,6 +240,7 @@ def main():
                     input_ids=tokenized["input_ids"].to(device),
                     attention_mask=tokenized["attention_mask"].to(device),
                     do_sample=True, temperature=0.9, top_p=0.95,
+                    num_beams=1,
                     num_return_sequences=10,
                     max_new_tokens=args.max_new_tokens,
                 )

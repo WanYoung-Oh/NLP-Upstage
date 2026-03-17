@@ -38,13 +38,14 @@ from transformers import (
     GenerationConfig,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    Trainer,
     TrainerCallback,
     TrainerControl,
     TrainerState,
     TrainingArguments,
 )
 
-from src.data.preprocess import DatasetForSeq2Seq, Preprocess, clean_text, filter_by_length
+from src.data.preprocess import DatasetForCausalLM, DatasetForSeq2Seq, Preprocess, clean_text, filter_by_length
 from src.models.summarizer import load_tokenizer_and_model
 from src.utils.device import get_device
 from src.utils.metrics import compute_metrics
@@ -142,6 +143,114 @@ def _resolve_data_path(raw: str) -> str:
     return os.path.join(_LAUNCH_DIR, raw)
 
 
+def _build_causal_lm_dataset(
+    df: pd.DataFrame,
+    tokenizer,
+    max_length: int,
+) -> DatasetForCausalLM:
+    """Causal LM용 Dataset 생성.
+
+    각 샘플을 "[INST] {dialogue} [/INST]\n{summary}</s>" 형태로 구성하고
+    prompt 위치의 labels는 -100으로 마스킹합니다.
+    """
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    all_input_ids: list[list[int]] = []
+    all_attention_mask: list[list[int]] = []
+    all_labels: list[list[int]] = []
+
+    for _, row in df.iterrows():
+        dialogue = str(row["dialogue"])
+        summary = str(row.get("summary", ""))
+
+        prompt = f"[INST] 다음 대화를 한국어로 요약하세요:\n{dialogue}\n[/INST]\n"
+        response = summary + tokenizer.eos_token
+
+        prompt_ids: list[int] = tokenizer.encode(prompt, add_special_tokens=True)
+        response_ids: list[int] = tokenizer.encode(response, add_special_tokens=False)
+
+        full_ids = prompt_ids + response_ids
+        n_prompt = len(prompt_ids)
+
+        if len(full_ids) > max_length:
+            max_prompt_len = max_length - len(response_ids)
+            if max_prompt_len <= 0:
+                full_ids = full_ids[:max_length]
+                n_prompt = 0
+            else:
+                prompt_ids = prompt_ids[:max_prompt_len]
+                n_prompt = len(prompt_ids)
+                full_ids = prompt_ids + response_ids
+
+        seq_len = len(full_ids)
+        pad_len = max_length - seq_len
+
+        labels = [-100] * n_prompt + full_ids[n_prompt:] + [-100] * pad_len
+        attn_mask = [1] * seq_len + [0] * pad_len
+        full_ids = full_ids + [pad_id] * pad_len
+
+        all_input_ids.append(full_ids)
+        all_attention_mask.append(attn_mask)
+        all_labels.append(labels)
+
+    return DatasetForCausalLM(
+        torch.tensor(all_input_ids, dtype=torch.long),
+        torch.tensor(all_attention_mask, dtype=torch.long),
+        torch.tensor(all_labels, dtype=torch.long),
+    )
+
+
+def _prepare_causal_lm_datasets(
+    cfg: DictConfig,
+    tokenizer,
+) -> tuple[DatasetForCausalLM, DatasetForCausalLM | None]:
+    """Causal LM 아키텍처 전용 데이터셋 준비."""
+    data_path = _resolve_data_path(cfg.general.data_path)
+    use_all_data: bool = getattr(cfg.training, "use_all_data", False)
+    data_cfg = getattr(cfg, "data", None)
+    use_cleaning: bool = getattr(data_cfg, "use_cleaning", False) if data_cfg else False
+    use_length_filter: bool = getattr(data_cfg, "use_length_filter", False) if data_cfg else False
+    max_length: int = cfg.tokenizer.encoder_max_len + cfg.tokenizer.decoder_max_len
+
+    train_df = Preprocess.make_set_as_df(os.path.join(data_path, "train.csv"))
+
+    def _apply_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
+        if use_cleaning:
+            df = df.copy()
+            df["dialogue"] = df["dialogue"].apply(clean_text)
+            if "summary" in df.columns:
+                df["summary"] = df["summary"].apply(clean_text)
+            print("[Preprocess] clean_text 적용 완료")
+        if use_length_filter:
+            df = filter_by_length(df)
+        return df
+
+    train_df = _apply_preprocessing(train_df)
+
+    if use_all_data:
+        val_df = Preprocess.make_set_as_df(os.path.join(data_path, "dev.csv"))
+        val_df = _apply_preprocessing(val_df)
+        train_df = pd.concat([train_df, val_df], ignore_index=True)
+        print(
+            "\n" + "=" * 60 + "\n"
+            "[최종 제출 모드] use_all_data=True\n"
+            f"  train={len(train_df)}건 (train+dev 합산), eval 비활성화\n"
+            + "=" * 60 + "\n"
+        )
+        return _build_causal_lm_dataset(train_df, tokenizer, max_length), None
+
+    val_df = Preprocess.make_set_as_df(os.path.join(data_path, "dev.csv"))
+    if use_cleaning:
+        val_df = val_df.copy()
+        val_df["dialogue"] = val_df["dialogue"].apply(clean_text)
+        if "summary" in val_df.columns:
+            val_df["summary"] = val_df["summary"].apply(clean_text)
+
+    train_dataset = _build_causal_lm_dataset(train_df, tokenizer, max_length)
+    val_dataset = _build_causal_lm_dataset(val_df, tokenizer, max_length)
+    print(f"[Data] train={len(train_dataset)}, val={len(val_dataset)}")
+    return train_dataset, val_dataset
+
+
 def _prepare_datasets(
     cfg: DictConfig,
     preprocessor: Preprocess,
@@ -154,6 +263,9 @@ def _prepare_datasets(
     이 경우 val_dataset=None을 반환해 eval을 완전히 비활성화합니다.
     dev.csv를 eval에 재사용하면 지표가 오염되므로 절대 eval에 포함하지 않습니다.
     """
+    if cfg.model.architecture == "causal_lm":
+        return _prepare_causal_lm_datasets(cfg, tokenizer)
+
     data_path = _resolve_data_path(cfg.general.data_path)
     prefix = getattr(cfg.model, "prefix", "")
     use_all_data: bool = getattr(cfg.training, "use_all_data", False)
@@ -285,15 +397,80 @@ def main(cfg: DictConfig) -> None:
         print(f"[Train] fp16=True 설정이 무시됩니다 (device={device.type}). fp32로 학습합니다.")
 
     use_all_data: bool = getattr(cfg.training, "use_all_data", False)
+    num_train_epochs: int = int(cfg.training.num_train_epochs)
     gen_config = _build_generation_config(cfg, tokenizer=tokenizer, model=model)
+    architecture: str = cfg.model.architecture
 
-    if use_all_data:
+    if architecture == "causal_lm":
+        # Causal LM은 Seq2SeqTrainer 대신 표준 Trainer 사용.
+        # predict_with_generate 없이 eval_loss 기반으로 학습합니다.
+        common_kw = dict(
+            output_dir=output_dir,
+            num_train_epochs=num_train_epochs,
+            learning_rate=cfg.training.learning_rate,
+            per_device_train_batch_size=cfg.training.per_device_train_batch_size,
+            warmup_ratio=cfg.training.warmup_ratio,
+            weight_decay=cfg.training.weight_decay,
+            lr_scheduler_type=cfg.training.lr_scheduler_type,
+            optim=cfg.training.optim,
+            gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
+            max_grad_norm=cfg.training.max_grad_norm,
+            fp16=use_fp16,
+            bf16=use_bf16,
+            seed=cfg.training.seed,
+            logging_dir=os.path.join(output_dir, "logs"),
+            logging_strategy=cfg.training.logging_strategy,
+            report_to=cfg.training.report_to,
+            label_smoothing_factor=cfg.training.label_smoothing_factor,
+        )
+        if use_all_data:
+            training_args = TrainingArguments(
+                **common_kw,
+                eval_strategy="no",
+                save_strategy="epoch",
+                save_total_limit=1,
+                load_best_model_at_end=False,
+                do_train=True,
+                do_eval=False,
+            )
+            trainer = Trainer(
+                model=model,
+                args=training_args,
+                train_dataset=train_dataset,
+            )
+        else:
+            training_args = TrainingArguments(
+                **common_kw,
+                per_device_eval_batch_size=cfg.training.per_device_eval_batch_size,
+                eval_strategy=cfg.training.evaluation_strategy,
+                save_strategy=cfg.training.save_strategy,
+                save_total_limit=cfg.training.save_total_limit,
+                metric_for_best_model="eval_loss",
+                greater_is_better=False,
+                load_best_model_at_end=cfg.training.load_best_model_at_end,
+                do_train=cfg.training.do_train,
+                do_eval=cfg.training.do_eval,
+            )
+            trainer = Trainer(
+                model=model,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=val_dataset,
+                callbacks=[
+                    EarlyStoppingCallback(
+                        early_stopping_patience=cfg.training.early_stopping_patience,
+                        early_stopping_threshold=cfg.training.early_stopping_threshold,
+                    ),
+                    BestCheckpointCallback(output_dir=output_dir, top_k=3),
+                ],
+            )
+    elif use_all_data:
         # dev가 학습 데이터에 포함되므로 eval을 완전히 끕니다.
         # BestCheckpointCallback·EarlyStoppingCallback 모두 제거하고
         # Trainer 기본 저장(epoch마다 1개 유지)으로 동작합니다.
         training_args = Seq2SeqTrainingArguments(
             output_dir=output_dir,
-            num_train_epochs=cfg.training.num_train_epochs,
+            num_train_epochs=num_train_epochs,
             learning_rate=cfg.training.learning_rate,
             per_device_train_batch_size=cfg.training.per_device_train_batch_size,
             warmup_ratio=cfg.training.warmup_ratio,
@@ -328,7 +505,7 @@ def main(cfg: DictConfig) -> None:
     else:
         training_args = Seq2SeqTrainingArguments(
             output_dir=output_dir,
-            num_train_epochs=cfg.training.num_train_epochs,
+            num_train_epochs=num_train_epochs,
             learning_rate=cfg.training.learning_rate,
             per_device_train_batch_size=cfg.training.per_device_train_batch_size,
             per_device_eval_batch_size=cfg.training.per_device_eval_batch_size,

@@ -19,6 +19,7 @@
 11. [실험 자동화 스크립트](#11-실험-자동화-스크립트)
 12. [단위 테스트](#12-단위-테스트)
 13. [트러블슈팅](#13-트러블슈팅)
+    - 13-7. [Causal LM batch_size mismatch 오류](#13-7-causal-lm-학습-시-batch_size-mismatch-오류) (신규)
 
 ---
 
@@ -73,8 +74,8 @@ NLP/
 │   ├── ensemble.py          # 앙상블 / GroupKFold OOF / MBRDecoder
 │   ├── data/
 │   │   ├── preprocess.py    # Preprocess, clean_text, filter_by_length,
-│   │   │                    #   DatasetForSeq2Seq, DatasetForInference,
-│   │   │                    #   reverse_utterances, apply_tta
+│   │   │                    # DatasetForSeq2Seq, DatasetForCausalLM, DatasetForInference,
+│   │   │                    # reverse_utterances, apply_tta
 │   │   ├── augment.py       # EDA / back-translation 증강 핵심 로직
 │   │   └── run_augment.py   # 증강 CLI 진입점
 │   ├── models/
@@ -700,6 +701,12 @@ python src/train.py model=solar_qlora training=qlora
 - 4-bit NF4 양자화 (bitsandbytes)
 - LoRA: `r=64`, `alpha=128`, `target_modules: [q_proj, v_proj]`
 - `device_map="auto"`로 로드되므로 별도 `.to(device)` 불필요
+- **Causal LM 전용 데이터 포맷**: `DatasetForCausalLM`을 사용하며, 각 샘플을 아래 형태의 단일 시퀀스로 구성합니다. prompt 위치의 labels는 `-100`으로 마스킹해 요약문 토큰에 대해서만 loss를 계산합니다.
+  ```
+  [INST] 다음 대화를 한국어로 요약하세요:\n{dialogue}\n[/INST]\n{summary}</s>
+  ```
+  `max_length = encoder_max_len(512) + decoder_max_len(100) = 612` 토큰으로 패딩됩니다.
+- **표준 `Trainer` 사용**: `Seq2SeqTrainer` 대신 `Trainer + TrainingArguments`를 사용하며, `predict_with_generate`를 사용하지 않습니다. 체크포인트 선택 기준은 ROUGE 대신 `eval_loss` (낮을수록 우수)입니다.
 
 ---
 
@@ -842,14 +849,26 @@ python src/train.py metrics.use_korouge=true
 
 ---
 
-### 13-7. Solar API 추론 분기 오류
+### 13-7. Causal LM 학습 시 `batch_size mismatch` 오류
+
+```
+ValueError: Expected input batch_size (2048) to match target batch_size (400).
+```
+
+**원인**: SOLAR 등 decoder-only Causal LM은 `input_ids`와 `labels`가 동일한 shape이어야 합니다. 기존 `DatasetForSeq2Seq`는 encoder `input_ids`(512토큰)와 decoder `labels`(100토큰)를 별도 텐서로 반환하므로 shape mismatch가 발생합니다.
+
+**해결**: `architecture: causal_lm` 설정 시 `_prepare_datasets()`가 자동으로 `DatasetForCausalLM`을 사용하도록 분기합니다. prompt + response를 단일 시퀀스로 합쳐 동일 shape을 보장하며, `Seq2SeqTrainer` 대신 표준 `Trainer`를 사용합니다. 별도 설정 없이 `model=solar_qlora training=qlora`로 실행하면 됩니다.
+
+---
+
+### 13-8. Solar API 추론 분기 오류
 
 `inference=solar_api` 설정에 `inference_type: solar_api` 키가 있어야 합니다.
 `conf/inference/solar_api.yaml` 및 `zero_shot_solar.yaml`에 이미 포함되어 있습니다.
 
 ---
 
-### 13-8. `evaluate_on_dev.py` 상대 경로 오류
+### 13-9. `evaluate_on_dev.py` 상대 경로 오류
 
 ```
 HFValidationError: Repo id must be in the form 'repo_name' ...

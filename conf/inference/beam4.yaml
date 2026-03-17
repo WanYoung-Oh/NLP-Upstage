@@ -12,5 +12,6 @@ remove_tokens:
   - "<pad>"
 ckt_path: "checkpoints/best_model"
 result_path: "./prediction/"
+output_filename: output.csv
 # TTA: 발화 역전 N-way 변형 후 MBR 선택 (1=비활성화, 2=원본+역전, ...)
 n_tta_ways: 1

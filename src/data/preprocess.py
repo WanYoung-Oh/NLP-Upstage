@@ -176,6 +176,34 @@ DatasetForTrain = DatasetForSeq2Seq
 DatasetForVal = DatasetForSeq2Seq
 
 
+class DatasetForCausalLM(Dataset):
+    """Causal LM (decoder-only) 학습/검증용 Dataset.
+
+    prompt + response를 하나의 시퀀스로 합치고,
+    prompt 위치의 labels를 -100으로 마스킹해 loss 계산에서 제외합니다.
+    """
+
+    def __init__(
+        self,
+        input_ids: torch.Tensor,       # (N, seq_len)
+        attention_mask: torch.Tensor,  # (N, seq_len)
+        labels: torch.Tensor,          # (N, seq_len), -100 at prompt positions
+    ):
+        self.input_ids = input_ids
+        self.attention_mask = attention_mask
+        self.labels = labels
+
+    def __getitem__(self, idx: int) -> dict:
+        return {
+            "input_ids": self.input_ids[idx],
+            "attention_mask": self.attention_mask[idx],
+            "labels": self.labels[idx],
+        }
+
+    def __len__(self) -> int:
+        return len(self.input_ids)
+
+
 class DatasetForInference(Dataset):
     def __init__(self, encoder_input, test_id: pd.Series):
         self.encoder_input = encoder_input

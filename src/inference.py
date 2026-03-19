@@ -474,6 +474,16 @@ class SolarAPIInferencer:
         "5. 은어·약어 없이 공식적으로 사용되는 표준어로 작성합니다."
     )
 
+    '''CoT 등 더 좋은 프롬프트 만들어 넣어야 함 
+    SYSTEM_PROMPT = (
+        "당신은 한국어 대화 요약 전문가입니다."
+        "주어진 대화를 요약하기 전에, 반드시 아래 단계에 따라 분석을 먼저 수행하세요.\n"
+        "1. 분석(Analysis): 화자들의 관계, 주요 사건, 최종 결론을 차례대로 정리합니다.\n"
+        "2. 요약(Summary): 분석된 내용을 바탕으로 대화의 20% 이내 분량으로 최종 요약합니다.\n"
+        "3. 모든 출력은 한국어 표준어를 사용하며, 명명된 개체(이름, 지명 등)를 보존합니다."
+    )
+    '''
+
     def __init__(self, cfg: DictConfig) -> None:
         self.cfg = cfg
         try:
@@ -503,6 +513,35 @@ class SolarAPIInferencer:
                 messages.append({"role": "assistant", "content": ex["summary"]})
         messages.append({"role": "user", "content": f"대화:\n{dialogue}"})
         return messages
+        
+    '''CoT
+    def build_prompt(
+        self,
+        dialogue: str,
+        few_shot_examples: list[dict] | None = None,
+    ) -> list[dict]:
+        messages: list[dict] = [{"role": "system", "content": self.SYSTEM_PROMPT_SoT}]
+    
+        if few_shot_examples:
+            for ex in few_shot_examples:
+                messages.append({"role": "user", "content": f"대화:\n{ex['dialogue']}"})
+                
+                # Few-shot 예제에 분석(Analysis) 단계를 강제로 주입하여 패턴을 학습시킵니다.
+                # (train 데이터의 topic 컬럼 등을 활용하면 더 좋습니다)
+                cot_content = (
+                    f"분석:\n- 주요 내용: {ex.get('topic', '대화 내용 요약')}\n"
+                    f"- 요약 방식: 핵심 사건 위주\n\n"
+                    f"요약: {ex['summary']}"
+                )
+                messages.append({"role": "assistant", "content": cot_content})
+
+        # 실제 추론할 데이터
+        messages.append({
+            "role": "user", 
+            "content": f"대화:\n{dialogue}\n\n단계별로 분석한 후 최종 요약을 작성하세요."
+        })
+        return messages
+    '''
 
     def summarize(self, dialogue: str, few_shot: list[dict] | None = None) -> str:
         cfg = self.cfg

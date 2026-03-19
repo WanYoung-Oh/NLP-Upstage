@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:code.claude.com)",
+      "Bash(unzip:*)",
+      "Bash(python -c \"\nimport sys; sys.path.insert\\(0, '.'\\)\nfrom omegaconf import OmegaConf\nimport hydra\nfrom hydra import compose, initialize_config_dir\n\nwith initialize_config_dir\\(config_dir='/Users/owy/Dev/NLP/conf', version_base=None\\):\n    cfg = compose\\(config_name='config'\\)\n    print\\(OmegaConf.to_yaml\\(cfg\\)\\)\n\")",
+      "Bash(python -c \"import korouge_score; print\\('korouge_score OK'\\)\" 2>&1; python -c \"import kiwipiepy; print\\('kiwipiepy OK'\\)\" 2>&1)",
+      "Bash(python -c \"\nfrom korouge_score import rouge_scorer\nscorer = rouge_scorer.RougeScorer\\(['rouge1','rouge2','rougeL','rougeLsum']\\)\ntext = '오늘 날씨가 맑고 좋습니다.'\nresult = scorer.score\\(text, text\\)\nprint\\(result\\)\n\" 2>&1)",
+      "Bash(python -c \"\nimport sys; sys.path.insert\\(0, '.'\\)\nfrom hydra import compose, initialize_config_dir\nimport os\n\nwith initialize_config_dir\\(config_dir='/Users/owy/Dev/NLP/conf', version_base=None\\):\n    cfg = compose\\(config_name='config'\\)\n\nprint\\('config.yaml data_path:', cfg.general.data_path\\)\n\nlaunch_dir = os.getcwd\\(\\)\nraw = cfg.general.data_path\nresolved = raw if os.path.isabs\\(raw\\) else os.path.join\\(launch_dir, raw\\)\nprint\\('launch_dir:', launch_dir\\)\nprint\\('resolved  :', resolved\\)\nprint\\('exists    :', os.path.isdir\\(resolved\\)\\)\nprint\\('train.csv :', os.path.exists\\(os.path.join\\(resolved, 'train.csv'\\)\\)\\)\nprint\\(\\)\nprint\\('PASS ✅'\\)\n\" 2>&1)",
+      "Bash(python -c \"import accelerate, transformers, torch; print\\('accelerate:', accelerate.__version__\\); print\\('transformers:', transformers.__version__\\); print\\('torch:', torch.__version__\\)\")",
+      "Bash(pip install:*)",
+      "Bash(sysctl hw.memsize)",
+      "Bash(python -c \"\nimport sys; sys.path.insert\\(0, '.'\\)\nfrom hydra import compose, initialize_config_dir\nwith initialize_config_dir\\(config_dir='/Users/owy/Dev/NLP/conf', version_base=None\\):\n    cfg = compose\\(config_name='config', overrides=['training=mps']\\)\n\nt = cfg.training\nprint\\('per_device_train_batch_size:', t.per_device_train_batch_size\\)\nprint\\('per_device_eval_batch_size: ', t.per_device_eval_batch_size\\)\nprint\\('gradient_accumulation_steps:', t.gradient_accumulation_steps\\)\nprint\\('유효 배치 크기:', t.per_device_train_batch_size * t.gradient_accumulation_steps\\)\nprint\\('lr:', t.learning_rate, '/ epochs:', t.num_train_epochs\\)\n\" 2>&1)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

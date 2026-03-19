@@ -41,7 +41,7 @@ korouge-score>=0.1.4   # pip install korouge_score
 # Korean NLP (Required for Korean tasks)
 # ==================================================
 konlpy>=0.6.0  # 한국어 형태소 분석 (형태소 기반 ROUGE 평가에 필수)
-# python-mecab-ko>=1.0.0  # Mecab wrapper (konlpy 대안)
+python-mecab-ko>=1.0.0  # Mecab wrapper (konlpy 대안)
 
 # ==================================================
 # Data Processing (Required)

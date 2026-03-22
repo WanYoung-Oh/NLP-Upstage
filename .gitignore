@@ -5,6 +5,7 @@
 .env.local
 .env.*.local
 *.key
+.python-version
 
 # ==================================================
 # Hydra Outputs (Generated during experiments)

@@ -1,0 +1,25 @@
+# 프롬프트 엔지니어링 필수 패키지
+
+# 기본 라이브러리
+torch>=2.0.0
+transformers>=4.35.0
+datasets>=2.14.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# SFT 학습
+trl>=0.7.0
+peft>=0.6.0
+accelerate>=0.24.0
+
+# 평가
+rouge>=1.0.1
+mecab-python3>=1.0.6
+
+# 유틸리티
+tqdm>=4.65.0
+sentencepiece>=0.1.99
+
+# 선택적 (성능 향상)
+# flash-attn>=2.3.0  # RTX 3090에서 Flash Attention 2 사용
+# unsloth  # 최적화 커널 (별도 설치 필요)

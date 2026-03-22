@@ -1,20 +1,21 @@
 # ==================================================
 # Core Deep Learning Framework
 # ==================================================
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=2.0.0
+torch==2.4.1
+torchvision==0.19.1
+torchaudio==2.4.1
 pytorch_lightning==2.1.2
 
 # ==================================================
 # HuggingFace Ecosystem (Required)
 # ==================================================
-transformers[torch]>=4.35.0
-datasets>=2.14.0
-tokenizers>=0.15.0
-accelerate>=0.24.0
-sentencepiece>=0.1.99
-protobuf>=3.20.0
+transformers[torch]==5.3.0
+huggingface_hub==1.7.1
+datasets>=3.4.1,<4.4.0
+tokenizers==0.22.1
+accelerate==1.13.0
+sentencepiece==0.2.0
+protobuf==3.20.3
 
 # ==================================================
 # Hydra Configuration Management (Required)
@@ -40,8 +41,9 @@ korouge-score>=0.1.4   # pip install korouge_score
 # ==================================================
 # Korean NLP (Required for Korean tasks)
 # ==================================================
-konlpy>=0.6.0  # 한국어 형태소 분석 (형태소 기반 ROUGE 평가에 필수)
-python-mecab-ko>=1.0.0  # Mecab wrapper (konlpy 대안)
+konlpy>=0.6.0          # [cite: 1] 한국어 형태소 분석
+mecab-python3>=1.0.8    # MeCab 파이썬 바인딩 (수동 빌드 오류 방지용 최신 버전)
+mecab-ko-dic>=1.0.0     # MeCab 사전 경로 자동 인식 도우미
 
 # ==================================================
 # Data Processing (Required)
@@ -67,8 +69,16 @@ pyarrow>=14.0.0  # Faster dataset loading
 # ==================================================
 # QLoRA / PEFT (Required for SOLAR-KO-10.7B fine-tuning)
 # ==================================================
-peft>=0.6.0              # LoRA / QLoRA 적용
-bitsandbytes>=0.41.0     # 4-bit 양자화 (SOLAR QLoRA)
+peft>=0.18.0
+trl>=0.18.2,<=0.24.0,!=0.19.0
+bitsandbytes==0.44.1
+
+# ==================================================
+# Unsloth Stack (Qwen3-14B LoRA용)
+# ==================================================
+unsloth==2026.3.8
+unsloth_zoo==2026.3.4
+# flash-attn>=2.3.0  # RTX 3090에서 Flash Attention 2 사용
 
 # ==================================================
 # Data Augmentation (Required for EDA/AEDA, Back-Translation)
@@ -92,8 +102,8 @@ openai>=1.2.0            # Solar Chat API 및 OpenAI 호환 엔드포인트
 # ==================================================
 # jupyter>=1.0.0
 # ipython>=8.12.0
-# matplotlib>=3.7.0
-# seaborn>=0.12.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
 # tensorboard>=2.14.0
 
 # ==================================================
@@ -128,4 +138,17 @@ openai>=1.2.0            # Solar Chat API 및 OpenAI 호환 엔드포인트
 #    - Parallel execution: pip install hydra-joblib-launcher
 #
 # 4. 최소 설치 (빠른 시작):
-#    pip install torch transformers hydra-core omegaconf wandb rouge pandas python-dotenv
+#    - pip install torch transformers hydra-core omegaconf wandb rouge pandas python-dotenv
+
+# 5. 빌드 도구 및 JDK 설치 (이미 하셨다면 생략 가능)
+#    - sudo apt-get update
+#    - sudo apt-get install build-essential openjdk-8-jdk python3-dev curl
+
+# 6. MeCab 엔진 및 사전 설치 (이미 'done!'을 보셨으므로 생략 가능)
+#    - bash <(curl -s https://raw.githubusercontent.com/konlpy/konlpy/master/scripts/mecab.sh)
+
+# 7. 라이브러리 인식 갱신 (필수)
+#    - sudo ldconfig
+
+# 8. 수정된 requirements.txt 설치
+#    - pip install -r requirements.txt

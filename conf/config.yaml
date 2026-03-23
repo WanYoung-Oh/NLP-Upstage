@@ -28,6 +28,7 @@ tokenizer:
     - "#PhoneNumber#"
     - "#Address#"
     - "#PassportNumber#"
+    - "#PersonName#"
     # 추가 마스킹 토큰 (베이스라인 누락분)
     - "#DateOfBirth#"
     - "#SSN#"

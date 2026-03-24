@@ -6,3 +6,6 @@ learning_rate: 3e-5
 per_device_train_batch_size: 32
 early_stopping_patience: 5
 label_smoothing_factor: 0.1
+# 장시간·T5 계열에서 fp16+checkpointing 시 grad NaN이 나기 쉬움 → RTX 30xx 등은 bf16 권장
+fp16: false
+bf16: true

@@ -6,3 +6,6 @@ defaults:
 per_device_train_batch_size: 8
 per_device_eval_batch_size: 16
 gradient_accumulation_steps: 4
+# T5 + fp16 + gradient checkpointing 시 grad_norm NaN·ROUGE 정지가 나기 쉬움 → Ampere 이상은 bf16 권장
+fp16: false
+bf16: true

@@ -34,6 +34,7 @@ import torch
 import wandb
 from omegaconf import DictConfig, OmegaConf
 from transformers import (
+    AutoConfig,
     EarlyStoppingCallback,
     GenerationConfig,
     Seq2SeqTrainer,
@@ -44,11 +45,49 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
+from transformers.tokenization_utils_base import BatchEncoding
 
 from src.data.preprocess import DatasetForCausalLM, DatasetForSeq2Seq, Preprocess, build_topic_prefix, clean_text, filter_by_length, _TOPIC_MASK
 from src.models.summarizer import load_tokenizer_and_model
 from src.utils.device import get_device
 from src.utils.metrics import compute_metrics
+
+
+def _t5_decoder_and_labels_from_targets(
+    tokenizer,
+    dec_out_texts: list[str],
+    dec_max: int,
+    tok_kw: dict,
+    decoder_start_token_id: int,
+) -> tuple[BatchEncoding, BatchEncoding]:
+    """T5 계열: 요약+EOS를 한 번만 토큰화하고 teacher forcing용 decoder_input_ids = shift_right(labels).
+
+    BART용 `<s>`+요약 문자열은 T5에서 `<`,`s`,`>`로 쪼개져 학습이 붕괴되므로 사용하지 않습니다.
+    """
+    full = tokenizer(
+        dec_out_texts, truncation=True, max_length=dec_max, **tok_kw
+    )
+    label_ids = full["input_ids"].clone()
+    dec_ids = label_ids.clone()
+    dec_ids[:, 1:] = label_ids[:, :-1].clone()
+    dec_ids[:, 0] = decoder_start_token_id
+    dec_attn = full["attention_mask"].clone()
+    dec_attn[:, 1:] = full["attention_mask"][:, :-1].clone()
+    dec_attn[:, 0] = 1
+    decoder_batch = BatchEncoding({"input_ids": dec_ids, "attention_mask": dec_attn})
+    labels_batch = BatchEncoding({"input_ids": label_ids})
+    return decoder_batch, labels_batch
+
+
+def _t5_decoder_start_id(cfg: DictConfig, tokenizer) -> int:
+    revision = getattr(cfg.model, "revision", "main")
+    hcfg = AutoConfig.from_pretrained(cfg.model.model_name, revision=revision)
+    sid = getattr(hcfg, "decoder_start_token_id", None)
+    if sid is not None:
+        return int(sid)
+    if tokenizer.pad_token_id is not None:
+        return int(tokenizer.pad_token_id)
+    return 0
 
 
 def _build_generation_config(cfg: DictConfig, tokenizer=None, model=None) -> GenerationConfig | None:
@@ -358,14 +397,23 @@ def _prepare_datasets(
             "  ※ Early stopping·eval 지표가 모두 비활성화됩니다\n"
             + "=" * 60 + "\n"
         )
-        enc_train, dec_in_train, dec_out_train = preprocessor.make_input(
+        enc_train, _dec_in_train, dec_out_train = preprocessor.make_input(
             train_df, prefix=prefix, use_topic=use_topic, topic_mask_prob=0.25,
         )
-        train_dataset = DatasetForSeq2Seq(
-            tokenizer(enc_train, truncation=True, max_length=enc_max, **tok_kw),
-            tokenizer(dec_in_train, truncation=True, max_length=dec_max, **tok_kw),
-            tokenizer(dec_out_train, truncation=True, max_length=dec_max, **tok_kw),
-        )
+        enc_tok = tokenizer(enc_train, truncation=True, max_length=enc_max, **tok_kw)
+        if cfg.model.architecture == "t5":
+            dstart = _t5_decoder_start_id(cfg, tokenizer)
+            dec_in_tok, labels_tok = _t5_decoder_and_labels_from_targets(
+                tokenizer, dec_out_train, dec_max, tok_kw, dstart
+            )
+            print(f"[Train] T5 decoder 입력: shift_right(labels), decoder_start_token_id={dstart}")
+            train_dataset = DatasetForSeq2Seq(enc_tok, dec_in_tok, labels_tok)
+        else:
+            train_dataset = DatasetForSeq2Seq(
+                enc_tok,
+                tokenizer(_dec_in_train, truncation=True, max_length=dec_max, **tok_kw),
+                tokenizer(dec_out_train, truncation=True, max_length=dec_max, **tok_kw),
+            )
         return train_dataset, None
 
     val_df = preprocessor.make_set_as_df(os.path.join(data_path, "dev.csv"))
@@ -383,16 +431,36 @@ def _prepare_datasets(
         val_df, prefix=prefix, use_topic=use_topic, topic_mask_prob=0.0,
     )
 
-    train_dataset = DatasetForSeq2Seq(
-        tokenizer(enc_train, truncation=True, max_length=enc_max, **tok_kw),
-        tokenizer(dec_in_train, truncation=True, max_length=dec_max, **tok_kw),
-        tokenizer(dec_out_train, truncation=True, max_length=dec_max, **tok_kw),
-    )
-    val_dataset = DatasetForSeq2Seq(
-        tokenizer(enc_val, truncation=True, max_length=enc_max, **tok_kw),
-        tokenizer(dec_in_val, truncation=True, max_length=dec_max, **tok_kw),
-        tokenizer(dec_out_val, truncation=True, max_length=dec_max, **tok_kw),
-    )
+    if cfg.model.architecture == "t5":
+        dstart = _t5_decoder_start_id(cfg, tokenizer)
+        dec_tr, lab_tr = _t5_decoder_and_labels_from_targets(
+            tokenizer, dec_out_train, dec_max, tok_kw, dstart
+        )
+        dec_va, lab_va = _t5_decoder_and_labels_from_targets(
+            tokenizer, dec_out_val, dec_max, tok_kw, dstart
+        )
+        print(f"[Train] T5 decoder 입력: shift_right(labels), decoder_start_token_id={dstart}")
+        train_dataset = DatasetForSeq2Seq(
+            tokenizer(enc_train, truncation=True, max_length=enc_max, **tok_kw),
+            dec_tr,
+            lab_tr,
+        )
+        val_dataset = DatasetForSeq2Seq(
+            tokenizer(enc_val, truncation=True, max_length=enc_max, **tok_kw),
+            dec_va,
+            lab_va,
+        )
+    else:
+        train_dataset = DatasetForSeq2Seq(
+            tokenizer(enc_train, truncation=True, max_length=enc_max, **tok_kw),
+            tokenizer(dec_in_train, truncation=True, max_length=dec_max, **tok_kw),
+            tokenizer(dec_out_train, truncation=True, max_length=dec_max, **tok_kw),
+        )
+        val_dataset = DatasetForSeq2Seq(
+            tokenizer(enc_val, truncation=True, max_length=enc_max, **tok_kw),
+            tokenizer(dec_in_val, truncation=True, max_length=dec_max, **tok_kw),
+            tokenizer(dec_out_val, truncation=True, max_length=dec_max, **tok_kw),
+        )
 
     print(f"[Data] train={len(train_dataset)}, val={len(val_dataset)}")
     return train_dataset, val_dataset

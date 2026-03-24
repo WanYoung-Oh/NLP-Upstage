@@ -90,6 +90,7 @@ class Seq2SeqInferencer:
             n = getattr(cfg.inference, "n_samples", 10)
             gen_kwargs.update(
                 do_sample=True,
+                num_beams=getattr(cfg.inference, "num_beams", 1),
                 temperature=getattr(cfg.inference, "temperature", 0.9),
                 top_p=getattr(cfg.inference, "top_p", 0.95),
                 num_return_sequences=n,

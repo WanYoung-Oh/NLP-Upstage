@@ -200,8 +200,8 @@ python src/train.py training.learning_rate=5e-5 training.num_train_epochs=30
 
 ```yaml
 data:
-  use_cleaning: false        # true: clean_text() 적용 — 단독 자음·빈 괄호·반복 특수기호 제거
-  use_length_filter: false   # true: filter_by_length() 적용 — 이상치 길이 샘플 제거
+  use_cleaning: true        # true: clean_text() 적용 — 단독 자음·빈 괄호·반복 특수기호 제거
+  use_length_filter: true   # true: filter_by_length() 적용 — 이상치 길이 샘플 제거
   use_topic: false           # true: topic을 encoder 입력에 prepend (RESEARCH.md §13 방법 A)
 ```
 
@@ -644,6 +644,42 @@ paths = select_checkpoints_for_ensemble(
 # score 필터 (ROUGE 0.78 이상 또는 causal_lm 1/(1+loss) 기준값 이상만)
 paths = select_checkpoints_for_ensemble("checkpoints", top_k_per_run=1, min_score=0.78)
 ```
+
+### 6-5. 앙상블 CLI
+
+```python
+# 도움말
+python src/ensemble_cli.py -h
+python src/ensemble_cli.py merge -h
+
+# 두 예측 합치기 (가중치 동일)
+python src/ensemble_cli.py merge \
+  --inputs prediction/output_a.csv prediction/output_b.csv \
+  --output prediction/ensemble_merged.csv
+
+# 가중치 지정
+python src/ensemble_cli.py merge \
+  --inputs pred1.csv pred2.csv pred3.csv \
+  --output out.csv \
+  --weights 0.5 0.3 0.2
+
+# OOF 점수로 가중치 자동
+python src/ensemble_cli.py merge \
+  --inputs m1.csv m2.csv \
+  --output out.csv \
+  --oof-scores 0.42 0.39
+
+# 체크포인트 목록
+python src/ensemble_cli.py list-checkpoints --root checkpoints
+
+# 앙상블에 쓸 경로만 뽑기
+python src/ensemble_cli.py select-checkpoints \
+  --root checkpoints \
+  --runs 260314_run_005 260314_run_003 \
+  --min-score 0.75 \
+  --top-k-per-run 1
+```
+
 
 > **score 통일 형식**: seq2seq는 `eval_rouge_combined`, causal_lm(SOLAR QLoRA)은 `1/(1+eval_loss)` 변환값으로 저장됩니다. 두 경우 모두 "높을수록 좋음"으로 통일되어 동일한 유틸 함수로 처리 가능합니다.
 

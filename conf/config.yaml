@@ -7,7 +7,7 @@ defaults:
 general:
   data_path: "data"
   checkpoints_root: "checkpoints"   # train.py / GroupKFoldTrainer 공통 checkpoint 루트
-  seed: 42
+  seed: 2026
 
 tokenizer:
   encoder_max_len: 512
@@ -37,8 +37,8 @@ tokenizer:
     - "#Email#"
 
 data:
-  use_cleaning: true        # true: clean_text() 적용 (Phase 3+, 단독 자음/모음·빈 괄호·반복 특수기호 제거)
-  use_length_filter: true   # true: filter_by_length() 적용 (dialogue≤1500, summary 50~250자)
+  use_cleaning: false        # true: clean_text() 적용 (Phase 3+, 단독 자음/모음·빈 괄호·반복 특수기호 제거)
+  use_length_filter: false   # true: filter_by_length() 적용 (dialogue≤1500, summary 50~250자)
   use_topic: false          # true: topic을 encoder 입력 앞에 prepend (방법 A, RESEARCH.md §13)
                             #   seq2seq  → "[TOPIC] {topic} [SEP]\n{dialogue}"
                             #   causal_lm→ "[INST] 주제: {topic}\n대화:\n{dialogue}\n[/INST]\n"

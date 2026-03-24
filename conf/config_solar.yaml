@@ -1,0 +1,105 @@
+# ============================================================
+# KoBART + Solar API 하이브리드 파이프라인 설정
+# ============================================================
+
+general:
+  data_path: "./data/"                          # train.csv, dev.csv, test.csv 위치
+  model_name: "digit82/kobart-summarization"    # 기본 모델 (학습 시 사용)
+  output_dir: "./prediction/"
+
+# ------------------------------------------------------------
+# 토크나이저 설정
+# ------------------------------------------------------------
+tokenizer:
+  encoder_max_len: 512
+  decoder_max_len: 100
+  bos_token: "<s>"
+  eos_token: "</s>"
+  special_tokens:
+    # 베이스라인 화자 토큰
+    - "#Person1#"
+    - "#Person2#"
+    - "#Person3#"
+    # 추가 화자 토큰 (대회 데이터 최대 7명 대응 — 실제 데이터 존재 여부 확인 후 사용)
+    - "#Person4#"
+    - "#Person5#"
+    - "#Person6#"
+    - "#Person7#"
+    # 개인정보 마스킹 토큰 (베이스라인 포함분)
+    - "#PhoneNumber#"
+    - "#Address#"
+    - "#PassportNumber#"
+    - "#PersonName#"
+    # 추가 마스킹 토큰 (베이스라인 누락분)
+    - "#DateOfBirth#"
+    - "#SSN#"
+    - "#CardNumber#"
+    - "#CarNumber#"
+    - "#Email#"
+
+# ------------------------------------------------------------
+# 학습 설정 (KoBART fine-tuning)
+# ------------------------------------------------------------
+training:
+  num_train_epochs: 20
+  learning_rate: 1.0e-5
+  per_device_train_batch_size: 50
+  per_device_eval_batch_size: 32
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  lr_scheduler_type: "cosine"
+  optim: "adamw_torch"
+  gradient_accumulation_steps: 1
+  evaluation_strategy: "epoch"
+  save_strategy: "epoch"
+  save_total_limit: 5
+  fp16: true
+  load_best_model_at_end: true
+  seed: 2026
+  predict_with_generate: true
+  generation_max_length: 100
+  early_stopping_patience: 3
+  early_stopping_threshold: 0.001
+  report_to: "wandb"
+
+# ------------------------------------------------------------
+# WandB 설정
+# ------------------------------------------------------------
+wandb:
+  entity: "owy007-"         # ← 본인 WandB 유저네임
+  project: "dialogue_summarization"
+  name: "kobart_solar_hybrid"
+
+# ------------------------------------------------------------
+# 추론 설정 (KoBART)
+# ------------------------------------------------------------
+inference:
+  ckt_path: "./checkpoints/best_model"    # 학습된 체크포인트 경로
+  result_path: "./prediction/"
+  no_repeat_ngram_size: 2
+  early_stopping: true
+  generate_max_length: 100
+  num_beams: 4
+  batch_size: 32
+  remove_tokens:
+    - "<usr>"
+    - "<s>"
+    - "</s>"
+    - "<pad>"
+
+# ------------------------------------------------------------
+# Solar API 설정
+# ------------------------------------------------------------
+solar:
+  model_name: "solar-pro"                 # solar-pro | solar-mini
+  n_fewshot: 3                            # few-shot 예시 수
+  temperature: 0.3                        # 낮을수록 보수적 (ROUGE 보존에 유리)
+  max_tokens: 200                         # 요약문 최대 토큰 수
+  api_delay: 0.5                          # API 호출 간 대기(초), rate limit 방지
+  max_retries: 3                          # 실패 시 재시도 횟수
+
+  # 후처리 프롬프트 전략
+  refine_strategy: "conservative"
+  # conservative: 키워드 최대 유지, 문법만 수정 (ROUGE 보존 우선)
+  # moderate:     자연스러움과 ROUGE 균형
+  # aggressive:   자연스러움 우선 (ROUGE 하락 가능성 있음)

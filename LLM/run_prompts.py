@@ -54,6 +54,16 @@ def _resolve_input_path(path_str: str) -> Path:
     )
 
 
+def _causal_lm_device_map():
+    """
+    bitsandbytes 4bit 로드 시 device_map='auto'가 VRAM 추정 오류 등으로
+    일부를 CPU/디스크에 두면 ValueError가 납니다. 단일 GPU면 전부 cuda:0에 올립니다.
+    """
+    if torch.cuda.is_available():
+        return {"": 0}
+    return "auto"
+
+
 def _resolve_output_path(path_str: str) -> Path:
     """
     출력 경로를 프로젝트 루트 기준으로 보정하고 상위 디렉토리를 생성합니다.
@@ -90,7 +100,7 @@ def _load_model_and_tokenizer(model_path: str):
 
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
-            device_map="auto",
+            device_map=_causal_lm_device_map(),
             torch_dtype="auto",
             trust_remote_code=True,
         )
@@ -98,7 +108,7 @@ def _load_model_and_tokenizer(model_path: str):
     else:
         model = AutoModelForCausalLM.from_pretrained(
             str(resolved_model_path),
-            device_map="auto",
+            device_map=_causal_lm_device_map(),
             torch_dtype="auto",
             trust_remote_code=True,
         )

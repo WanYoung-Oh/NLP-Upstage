@@ -74,7 +74,7 @@ wandb:
 # 추론 설정 (KoBART)
 # ------------------------------------------------------------
 inference:
-  ckt_path: "./checkpoints/best_model"    # 학습된 체크포인트 경로
+  ckt_path: "./checkpoints/260324_run_002/epoch06_0.7736"    # 학습된 체크포인트 경로
   result_path: "./prediction/"
   no_repeat_ngram_size: 2
   early_stopping: true

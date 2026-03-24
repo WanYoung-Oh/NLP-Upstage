@@ -242,6 +242,7 @@ result = ensemble.predict(
 )
 result.to_csv('prediction/output_ensemble.csv', index=False)
 print(f'앙상블 완료: {len(result)}건 → prediction/output_ensemble.csv')
+)
 " 2>&1 | tee "$LOG_DIR/phase5_ensemble.log"
 
     log "[Phase5] 완료"

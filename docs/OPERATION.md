@@ -659,9 +659,9 @@ python src/ensemble_cli.py merge \
 
 # 가중치 지정
 python src/ensemble_cli.py merge \
-  --inputs pred1.csv pred2.csv pred3.csv \
-  --output out.csv \
-  --weights 0.5 0.3 0.2
+  --inputs ensemble/pred1.csv ensemble/pred2.csv ensemble/pred3.csv \
+  --output ensemble/ensemble_response_only_out.csv \
+  --weights 0.3 0.4 0.3
 
 # OOF 점수로 가중치 자동
 python src/ensemble_cli.py merge \

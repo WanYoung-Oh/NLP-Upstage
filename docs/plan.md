@@ -36,7 +36,7 @@
 
 ## 실험 결과 로그
 
-### KoBART dev Combined ROUGE (260324_run_003/epoch06_0.7962 기준)
+### KoBART dev Combined ROUGE (260324_run_003/epoch06_0.7962 기준
 
 | 방법 | R1 | R2 | RL | Combined | 비고 |
 |------|-----|-----|-----|---------|------|
@@ -108,22 +108,23 @@ TTA 오버헤드(2× 추론)는 점수 이득이 없으므로, 빠른 실험 시
 
 ---
 
-## 단계 3 — KoBART: 5-fold OOF 앙상블 (재학습 필요, 예상 효과: +0.5~1.5)
+## 단계 3 — KoBART: 5-fold OOF 앙상블 (재학습 필요) — ✅ 완료
 
-```bash
-# GroupKFoldTrainer 사용 (src/ensemble.py 기존 구현)
-python src/train.py training=full \
-  ++training.use_kfold=true \
-  ++training.n_splits=5
+**5-fold 학습 결과** (`260325_run_001`):
 
-# 각 fold 예측 → merge
-python src/ensemble_cli.py merge \
-  prediction/fold0.csv prediction/fold1.csv \
-  prediction/fold2.csv prediction/fold3.csv prediction/fold4.csv \
-  --output prediction/kobart_kfold_ensemble.csv
-```
+| Fold | Best Checkpoint | Val ROUGE-1 |
+|------|----------------|-------------|
+| 0 | epoch11_0.7579 | 0.7579 |
+| 1 | epoch11_0.7382 | 0.7382 |
+| 2 | epoch06_0.7447 | 0.7447 |
+| 3 | epoch12_0.7398 | 0.7398 |
+| 4 | epoch09_0.7350 | 0.7350 |
+| **평균** | — | **0.7431** |
 
-> 학습 코드 변경 없음. `GroupKFoldTrainer`가 이미 `src/ensemble.py`에 구현됨.
+- 각 fold best checkpoint → TTA 추론 → `prediction/kfold_fold{0~4}_test.csv`
+- 5-fold merge → `prediction/kobart_kfold_test.csv`
+- single best TTA → `prediction/kobart_single_test.csv`
+- single best beam4 → `prediction/kobart_single_beam4.csv`
 
 ---
 
@@ -201,20 +202,28 @@ python src/ensemble_cli.py merge \
 
 ---
 
-## 단계 6 — 교차 앙상블: KoBART + Qwen (예상 효과: +1.0~3.0)
+## 단계 6 — 교차 앙상블: KoBART + Qwen — ✅ 완료
 
-> 두 모델의 오류 패턴이 다르면 앙상블 이득이 크다.
+**앙상블 후보 8종 생성** (`scripts/cross_ensemble_grid.py`):
 
-```bash
-# 가중치 스윕 (dev ROUGE 기준)
-python src/ensemble_cli.py merge \
-  prediction/kobart_best.csv \
-  prediction/qwen_best.csv \
-  --weights 0.3 0.7 \
-  --output prediction/ensemble_0.3_0.7.csv
+| 파일 | KoBART | Qwen | 비고 |
+|------|--------|------|------|
+| `ensemble_kobart0.2_qwen0.8.csv` | single TTA 0.2 | 0.8 | Qwen 우세 |
+| `ensemble_kobart0.3_qwen0.7.csv` | single TTA 0.3 | 0.7 | |
+| `ensemble_kobart0.4_qwen0.6.csv` | single TTA 0.4 | 0.6 | |
+| `ensemble_kobart0.5_qwen0.5.csv` | single TTA 0.5 | 0.5 | |
+| `ensemble_kfold0.2_qwen0.8.csv` | 5-fold merge 0.2 | 0.8 | Qwen 우세 |
+| `ensemble_kfold0.3_qwen0.7.csv` | 5-fold merge 0.3 | 0.7 | |
+| `ensemble_kfold0.4_qwen0.6.csv` | 5-fold merge 0.4 | 0.6 | |
+| `ensemble_kfold0.5_qwen0.5.csv` | 5-fold merge 0.5 | 0.5 | |
 
-# dev에서 0.2~0.5 범위로 5~7종 후보 생성 → 최고 dev 점수 가중치만 LB 제출
-```
+**dev 참고 점수**:
+- KoBART single dev Combined = **0.4288** (`260324_run_003/epoch06_0.7962`)
+- Qwen MBR top-5 dev Combined = **0.7590** (dev 100샘플 기준)
+- ⚠️ Qwen dev 예측이 없어 가중치는 dev ROUGE로 최적화하지 않음 → LB 제출 전 Qwen dev 추론 후 가중치 검증 권장
+
+**권장 제출 순서**: `kfold0.2_qwen0.8` → `kobart0.2_qwen0.8` → `kfold0.3_qwen0.7`
+(Qwen 점수가 KoBART 대비 훨씬 높으므로 Qwen 가중치 0.7~0.8이 유력)
 
 > **LB 제출은 2~3종으로 제한** (shake-up 리스크 최소화)
 

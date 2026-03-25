@@ -40,7 +40,7 @@ class MBRDecoder:
             cand_safe = cand.strip() if cand.strip() else "."
             try:
                 scores = rouge.get_scores([cand_safe] * len(others), others, avg=True)
-                avg = scores["rouge-l"]["f"]
+                avg = scores["rouge-1"]["f"] + scores["rouge-2"]["f"] + scores["rouge-l"]["f"] 
             except Exception:
                 avg = 0.0
             if avg > best_score:

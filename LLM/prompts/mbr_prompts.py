@@ -152,12 +152,12 @@ PROMPT_8_BASE_COPY = {
 
 PROMPT_VARIANTS = {
     "base": PROMPT_1_BASE,
-    "abstract": PROMPT_2_ABSTRACT,
-    "oneshot": PROMPT_3_ONESHOT,
+    # "abstract": PROMPT_2_ABSTRACT,   # 4-B 실험: 단독 0.7176 → 하위권, MBR 노이즈
+    # "oneshot": PROMPT_3_ONESHOT,     # 4-B 실험: 단독 0.7130 → 하위권, MBR 노이즈
     "topic": PROMPT_4_TOPIC,
     "narrative": PROMPT_5_NARRATIVE,
     "qa_style": PROMPT_6_QA,
-    "threeshot": PROMPT_7_THREESHOT,
+    # "threeshot": PROMPT_7_THREESHOT, # 4-B 실험: 단독 0.6993 → 최하위, MBR 노이즈
     "base_copy": PROMPT_8_BASE_COPY,
 }
 

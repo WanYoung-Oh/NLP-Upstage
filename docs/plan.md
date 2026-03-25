@@ -79,22 +79,20 @@ python scripts/evaluate_on_dev.py --pred_csv prediction/<qwen_best>.csv
 
 ## 단계 2 — KoBART: 추론만으로 점수 올리기 (재학습 없음)
 
-### 2-A. 디코딩 파라미터 그리드 (예상 효과: +0.3~1.0)
+### 2-A. 디코딩 파라미터 그리드 — ✅ 완료
 
-`conf/inference/beam4.yaml` 복사 후 override로 비교:
+결과 (dev 499샘플, `260324_run_003/epoch06_0.7962`):
 
-```bash
-# beam 8, length_penalty 조합
-python src/inference.py inference=beam8 \
-  inference.length_penalty=1.2 \
-  inference.ckt_path=checkpoints/<best>/checkpoint-best
+| 설정 | Combined | vs 기준 |
+|------|---------|---------|
+| **beam4 mnt=100 lp=1.0** (현재) | **0.4289** | — |
+| beam4 mnt=150 lp=1.0 | 0.4289 | ±0 |
+| beam4 mnt=200 lp=1.0 | 0.4289 | ±0 |
+| beam4 mnt=100 lp=1.2 | 0.4267 | -0.002 |
+| beam4 mnt=100 lp=0.8 | 0.4262 | -0.003 |
 
-# max_length_ratio 조정 (beam4 기준)
-python src/inference.py inference=tta \
-  inference.max_length_ratio=0.6   # 현재값 확인 후 ±0.1 탐색
-```
-
-비교 우선순위: `beam4+TTA(현재)` → `beam8+TTA` → `beam4+sampling MBR`
+**결론**: max_new_tokens 증가 효과 없음 (요약이 100 토큰 안에서 자연 종료).
+length_penalty 변경 시 모두 하락. **현재 설정(beam4, mnt=100, lp=1.0)이 최적.**
 
 ### 2-B. TTA MBR vs. 샘플링 MBR 비교 — ✅ 완료
 
@@ -145,22 +143,40 @@ python src/ensemble_cli.py merge \
 **결론**: `max128 = max256` (truncation 없음). **샘플링은 크게 하락** (-0.08~-0.15).
 현재 설정(`greedy, max_new_tokens=128`)이 이미 최적. 변경 불필요.
 
-### 4-B. 프롬프트 수 최적화 (예상 효과: +0.2~0.5)
+### 4-B. 프롬프트 수 최적화 — ✅ 완료
 
-```bash
-# dev에서 8종 각각 ROUGE 측정 후 하위 2~3종 제거
-# 축소된 5~6종으로 MBR 재실행 → 노이즈 감소 여부 확인
-```
+결과 (dev 100샘플, greedy max128):
 
-> 변경: 프롬프트 목록 파일(`LLM/prompts/base_prompts.py`)에서 주석 처리만
+**프롬프트별 단독 ROUGE (Combined 순위)**
 
-### 4-C. 후처리 점검 (예상 효과: 버그 픽스 시 +1.0 이상)
+| 순위 | 프롬프트 | Combined |
+|------|----------|---------|
+| 1 | qa_style | **0.7514** |
+| 2 | base | 0.7497 |
+| 2 | base_copy | 0.7497 |
+| 4 | topic | 0.7319 |
+| 5 | narrative | 0.7309 |
+| 6 | abstract | 0.7176 |
+| 7 | oneshot | 0.7130 |
+| 8 | threeshot | 0.6993 |
 
-```bash
-# LLM/prompts/postprocess.py 확인
-# Qwen3 thinking 태그 (<think>...</think>) 제거 여부
-# 불필요한 줄바꿈·prefix 잔존 여부
-```
+**MBR 비교**
+
+| 방법 | Combined | 비고 |
+|------|---------|------|
+| 단독 최고 (qa_style) | 0.7514 | |
+| MBR 전체 8종 | 0.7294 | ❌ 단독보다 낮음 (노이즈 과다) |
+| **MBR 상위 5종** (qa_style, base, base_copy, topic, narrative) | **0.7590** | ✅ 전체보다 +0.030 |
+
+**결론**: 하위 3종(threeshot, oneshot, abstract) 제거 → **상위 5종 MBR 사용 권장**.
+`LLM/prompts/mbr_prompts.py`의 `PROMPT_VARIANTS`에서 3종 주석 처리만으로 적용 가능.
+
+### 4-C. 후처리 점검 — ✅ 완료 (버그 없음)
+
+- `LLM/prompts/postprocess.py:36` — `re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)` 정상 제거
+- `LLM/prompts/inference.py:96` — `summary = postprocess_summary(summary)` 파이프라인 연결 확인
+- 불필요한 prefix(`요약:`, `Summary:`) 제거, 화자 태그 정규화(`#Person 1#` → `#Person1#`) 정상 동작
+- **버그 없음, 추가 조치 불필요**
 
 ---
 

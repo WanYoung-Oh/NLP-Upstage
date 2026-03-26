@@ -150,17 +150,6 @@ TTA 오버헤드(2× 추론)는 점수 이득이 없으므로, 빠른 실험 시
 
 **프롬프트별 단독 ROUGE (Combined 순위)**
 
-| 순위 | 프롬프트 | Combined |
-|------|----------|---------|
-| 1 | qa_style | **0.7514** |
-| 2 | base | 0.7497 |
-| 2 | base_copy | 0.7497 |
-| 4 | topic | 0.7319 |
-| 5 | narrative | 0.7309 |
-| 6 | abstract | 0.7176 |
-| 7 | oneshot | 0.7130 |
-| 8 | threeshot | 0.6993 |
-
 **MBR 비교**
 
 | 방법 | Combined | 비고 |
@@ -171,6 +160,25 @@ TTA 오버헤드(2× 추론)는 점수 이득이 없으므로, 빠른 실험 시
 
 **결론**: 하위 3종(threeshot, oneshot, abstract) 제거 → **상위 5종 MBR 사용 권장**.
 `LLM/prompts/mbr_prompts.py`의 `PROMPT_VARIANTS`에서 3종 주석 처리만으로 적용 가능.
+
+### 4-D. 프롬프트 추가 및 정리 (2026-03-26)
+
+**신규 프롬프트 3종 추가** (`LLM/prompts/mbr_prompts.py`):
+
+| 변형 | 설명 |
+|------|------|
+| `gold_mimic` | Gold 정답 패턴 규칙 명시 (태그 시작, 동사 형식, 마침표 강제) |
+| `observer` | 제3자 관찰자 시점으로 객관적 서술 유도 |
+| `length_constrained` | 50~100자 길이 제약 명시로 간결한 요약 유도 |
+
+**`base_copy` 비활성화**: base와 완전히 동일 → 다양성 기여 없음. 신규 3종 추가로 앙상블 다양성 확보됨.
+
+**현재 활성 프롬프트 7종** (비활성 4종은 주석 처리):
+
+| 상태 | 변형 |
+|------|------|
+| ✅ 활성 | `base`, `topic`, `narrative`, `qa_style`, `gold_mimic`, `observer`, `length_constrained` |
+| 💤 비활성 | `abstract`, `oneshot`, `threeshot`, `base_copy` |
 
 ### 4-C. 후처리 점검 — ✅ 완료 (버그 없음)
 
@@ -185,20 +193,37 @@ TTA 오버헤드(2× 추론)는 점수 이득이 없으므로, 빠른 실험 시
 
 > 단계 4 완료 후 진행. dev 기준으로 검증된 설정만 학습.
 
-| 변수 | 현재 추정 | 탐색 범위 |
-|------|-----------|-----------|
-| `lora_r` | 16~32 | 32, 64 |
-| `lora_alpha` | 32~64 | r × 2 고정 |
-| `learning_rate` | 2e-4 | 1e-4, 3e-4 |
-| `max_seq_length` | 1024? | 1536 or 2048 (1회) |
-| `num_epochs` | 3 | dev loss 기준 조기 종료 |
+**베이스 설정** (기존 `checkpoint-542` 기준):
 
-```bash
-# LLM/response_only_SFT/ 노트북에서 파라미터만 변경
-# 한 번에 1~2 조합만 → dev ROUGE 비교
-```
+| 항목 | 값 |
+|------|----|
+| base model | `unsloth/qwen3-14b-unsloth-bnb-4bit` |
+| `lora_r` / `lora_alpha` | 32 / 32 (alpha=r, 비율 1.0) |
+| `learning_rate` | 2e-4 |
+| `max_seq_length` | 2048 |
+| `num_epochs` | 3 (epoch 1이 best) |
+| `per_device_batch` × `grad_accum` | 1 × 32 = effective bs 32 |
+| Best checkpoint | epoch 1 (step 542), eval_loss=0.7034 |
 
-**과적합 경고**: 51+ 베이스에서 epoch 늘리면 오히려 MBR 이득이 상쇄됨. dev 곡선 필수 확인.
+### 5-A. epoch=1 스크리닝 스윕 — 🔄 진행 중
+
+**실행 스크립트**: `LLM/response_only_SFT/run_qlora_sweep.py`
+
+| 실험 | `lora_r` | `lora_alpha` | `lr` | 변경 이유 |
+|------|----------|--------------|------|-----------|
+| **A** | 64 | 128 (r×2) | 2e-4 | rank 증가 → 표현력↑, alpha/r=2 표준화 |
+| **B** | 32 | 64 (r×2) | 1e-4 | alpha 보정 + 보수적 lr |
+| **C** | 32 | 64 (r×2) | 3e-4 | 공격적 lr 효과 비교 |
+
+- `eval_steps` = steps_per_epoch // 2 (epoch 내 2회 평가)
+- 각 실험 완료 후 dev 499샘플 qa_style 단독 추론 → Combined ROUGE 자동 출력
+- 결과: `prediction/qlora_sweep_results.csv`
+
+**과적합 경고**: epoch 1 이후 오히려 MBR 이득이 상쇄됨. dev 곡선 필수 확인.
+
+### 5-B. epoch 연장 — ⏳ 대기 중
+
+스크리닝 결과 베이스 대비 개선된 조합만 epoch 2~3으로 연장 예정.
 
 ---
 

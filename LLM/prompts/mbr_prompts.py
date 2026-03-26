@@ -1,9 +1,10 @@
 """
 MBR 앙상블용 프롬프트 변형 모듈
 
-MBR(Minimum Bayes Risk) 디코딩을 위한 8가지 프롬프트 변형을 제공합니다.
-다양한 스타일(추상형, Few-shot, 서술형 등)의 프롬프트를 통해 
-앙상블 효과를 극대화합니다.
+MBR(Minimum Bayes Risk) 디코딩을 위한 프롬프트 변형을 제공합니다.
+활성 7종: base, topic, narrative, qa_style, gold_mimic, observer, length_constrained
+비활성 4종(주석): abstract, oneshot, threeshot, base_copy
+다양한 스타일의 프롬프트를 통해 앙상블 효과를 극대화합니다.
 
 실측 성능:
 - Greedy (1개): ROUGE-1 0.5641
@@ -147,18 +148,66 @@ PROMPT_8_BASE_COPY = {
 
 
 # ============================================================================
+# 변형 A: Gold 패턴 모방형 - 실제 데이터 패턴을 명시적으로 학습
+# ============================================================================
+
+PROMPT_GOLD_MIMIC = {
+    "name": "gold_mimic",
+    "system": """당신은 한국어 대화 요약 전문가입니다.
+다음 규칙을 엄격히 따르세요:
+- #Person1#, #Person2# 태그로 시작하세요.
+- '~에 대해 이야기한다', '~을 설명한다', '~을 제안한다', '~을 요청한다' 같은 표현을 사용하세요.
+- 반드시 1~2문장, 마침표로 끝내세요.
+- 대화에 등장하는 고유명사(이름, 장소)는 그대로 유지하세요.""",
+    "user": "아래 대화를 1~2문장으로 요약하세요.\n\n{dialogue}",
+    "description": "Gold 정답 패턴을 명시적으로 규칙화한 프롬프트"
+}
+
+
+# ============================================================================
+# 변형 B: 역할 강화형 - 제3자 관찰자 시점 강조
+# ============================================================================
+
+PROMPT_OBSERVER = {
+    "name": "observer",
+    "system": """당신은 대화 내용을 기록하는 제3자 관찰자입니다.
+화자 태그(#Person1#, #Person2#)를 사용하여 누가 무엇을 했는지 객관적으로 기술하세요.
+핵심 행동과 결과만 1~2문장으로 작성하세요.""",
+    "user": "다음 대화에서 일어난 일을 요약하세요.\n\n{dialogue}",
+    "description": "제3자 관찰자 시점으로 객관적 서술 유도"
+}
+
+
+# ============================================================================
+# 변형 C: 길이 제약 명시형
+# ============================================================================
+
+PROMPT_LENGTH_CONSTRAINED = {
+    "name": "length_constrained",
+    "system": """당신은 한국어 대화 요약 전문가입니다.
+화자 태그(#Person1#, #Person2#)를 반드시 사용하세요.
+요약은 50~150자 이내로, 반드시 완전한 문장으로 작성하세요.""",
+    "user": "아래 대화의 핵심을 요약하세요.\n\n{dialogue}",
+    "description": "명시적 길이 제약으로 간결한 요약 유도"
+}
+
+
+# ============================================================================
 # 프롬프트 변형 딕셔너리
 # ============================================================================
 
 PROMPT_VARIANTS = {
     "base": PROMPT_1_BASE,
-    # "abstract": PROMPT_2_ABSTRACT,   # 4-B 실험: 단독 0.7176 → 하위권, MBR 노이즈
-    # "oneshot": PROMPT_3_ONESHOT,     # 4-B 실험: 단독 0.7130 → 하위권, MBR 노이즈
+    # "abstract": PROMPT_2_ABSTRACT,         # 4-B 실험: 단독 0.7176 → 하위권, MBR 노이즈
+    # "oneshot": PROMPT_3_ONESHOT,           # 4-B 실험: 단독 0.7130 → 하위권, MBR 노이즈
     "topic": PROMPT_4_TOPIC,
     "narrative": PROMPT_5_NARRATIVE,
     "qa_style": PROMPT_6_QA,
-    # "threeshot": PROMPT_7_THREESHOT, # 4-B 실험: 단독 0.6993 → 최하위, MBR 노이즈
-    "base_copy": PROMPT_8_BASE_COPY,
+    # "threeshot": PROMPT_7_THREESHOT,       # 4-B 실험: 단독 0.6993 → 최하위, MBR 노이즈
+    # "base_copy": PROMPT_8_BASE_COPY,  # base와 동일 → 다양성 기여 없음, 신규 3종 추가로 불필요
+    "gold_mimic": PROMPT_GOLD_MIMIC,
+    "observer": PROMPT_OBSERVER,
+    "length_constrained": PROMPT_LENGTH_CONSTRAINED,
 }
 
 
@@ -274,21 +323,24 @@ def get_prompt_statistics():
 # ============================================================================
 
 EXPECTED_SELECTION_FREQUENCY = {
-    "base": "30-35%",          # 가장 안정적
-    "base_copy": "30-35%",     # base와 합산
-    "abstract": "18-20%",      # 스타일 다양성
-    "oneshot": "15-17%",       # 형식 일관성
-    "topic": "12-15%",         # 맥락 활용
-    "narrative": "8-10%",      # 서술 스타일
-    "qa_style": "5-8%",        # 질의 스타일
-    "threeshot": "3-5%",       # 과도한 예시
+    "base": "30-35%",               # 가장 안정적
+    "base_copy": "30-35%",          # base와 합산
+    "abstract": "18-20%",           # 스타일 다양성
+    "oneshot": "15-17%",            # 형식 일관성
+    "topic": "12-15%",              # 맥락 활용
+    "narrative": "8-10%",           # 서술 스타일
+    "qa_style": "5-8%",             # 질의 스타일 (단독 최고: 0.7514)
+    "threeshot": "3-5%",            # 과도한 예시
+    "gold_mimic": "미측정",          # Gold 패턴 모방형 (신규)
+    "observer": "미측정",            # 제3자 관찰자형 (신규)
+    "length_constrained": "미측정",  # 길이 제약형 (신규)
 }
 
 
 if __name__ == "__main__":
     # 프롬프트 변형 확인
     print("=" * 80)
-    print("MBR 앙상블용 프롬프트 변형 (8개)")
+    print("MBR 앙상블용 프롬프트 변형 (활성 7개 / 전체 11개)")
     print("=" * 80)
     
     for i, (name, variant) in enumerate(PROMPT_VARIANTS.items(), 1):

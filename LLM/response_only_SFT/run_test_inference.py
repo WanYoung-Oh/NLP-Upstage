@@ -1,27 +1,26 @@
 """
 Test 추론 스크립트 — A/B 비교 후 최고 체크포인트로 test.csv 추론
 
+핵심: 모델 추론은 inference_worker.py를 별도 subprocess로 실행.
+      → 현재 프로세스에 Unsloth가 임포트돼 있어도 worker는 완전히 격리됨.
+
 사용법:
     cd /data/ephemeral/home/NLP/LLM/response_only_SFT
     python run_test_inference.py
-    # 또는 특정 실험 지정:
     python run_test_inference.py --exp exp_A_r64_a128_lr2e4
 """
 
 import os
-import gc
-import re
 import sys
 import json
 import argparse
+import subprocess
 from typing import List
 
 import pandas as pd
-import torch
-from tqdm.auto import tqdm
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 경로 설정
+# 경로
 # ──────────────────────────────────────────────────────────────────────────────
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
@@ -33,35 +32,33 @@ for p in [LLM_DIR, ROOT_DIR]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-DATA_PATH       = os.path.join(SCRIPT_DIR, "data")
-PRED_PATH       = os.path.join(SCRIPT_DIR, "prediction")
-MAX_SEQ_LENGTH  = 2048
-MAX_NEW_TOKENS  = 192
-
-# qa_style 프롬프트 (리더보드 최고점 기준)
-QA_SYSTEM = (
-    "당신은 한국어 대화 요약 전문가입니다.\n"
-    "대화를 분석하여 화자들이 무엇을 논의하고 어떤 결정을 내렸는지 요약하세요.\n"
-    "#Person1#, #Person2# 등의 화자 표기를 그대로 유지하세요.\n"
-    "간결하게 1~2문장으로 작성하세요."
-)
-QA_USER = "이 대화에서 무슨 일이 일어났나요?\n\n{dialogue}"
+DATA_PATH  = os.path.join(SCRIPT_DIR, "data")
+PRED_PATH  = os.path.join(SCRIPT_DIR, "prediction")
+WORKER     = os.path.join(SCRIPT_DIR, "inference_worker.py")
+PYTHON     = sys.executable
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 후처리
+# subprocess 추론 호출
 # ──────────────────────────────────────────────────────────────────────────────
-def postprocess(text: str) -> str:
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"#\s*Person\s*(\d+)\s*#", r"#Person\1#", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"^요약\s*:\s*", "", text).strip()
-    return text if text else "빈 요약"
+def call_worker(lora_path: str, input_csv: str, output_csv: str,
+                mode: str = "test", batch_size: int = 4) -> bool:
+    """inference_worker.py를 별도 프로세스로 실행. 성공 여부 반환."""
+    cmd = [
+        PYTHON, WORKER,
+        "--lora_path",  lora_path,
+        "--input_csv",  input_csv,
+        "--output_csv", output_csv,
+        "--mode",       mode,
+        "--batch_size", str(batch_size),
+    ]
+    print(f"[subprocess] {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=SCRIPT_DIR)
+    return result.returncode == 0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ROUGE 평가 (dev 결과 비교용)
+# ROUGE 평가
 # ──────────────────────────────────────────────────────────────────────────────
 def compute_rouge_combined(preds: List[str], golds: List[str]) -> dict:
     from rouge import Rouge
@@ -85,75 +82,42 @@ def compute_rouge_combined(preds: List[str], golds: List[str]) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# dev 추론 (누락된 경우 실행)
+# dev 추론 (누락 시 worker 호출)
 # ──────────────────────────────────────────────────────────────────────────────
-def run_dev_inference_if_missing(exp_name: str):
-    """dev 추론 CSV가 없으면 추론 실행 후 저장"""
+def run_dev_inference_if_missing(exp_name: str, batch_size: int = 1) -> bool:
     pred_file = os.path.join(PRED_PATH, f"dev_{exp_name}_qa_style.csv")
     if os.path.exists(pred_file):
         print(f"  [{exp_name}] dev 추론 파일 존재 → 스킵")
-        return
+        return True
 
-    lora_path = os.path.join(
-        os.path.dirname(PRED_PATH), "outputs", exp_name, "lora_adapter"
-    )
+    lora_path = os.path.join(SCRIPT_DIR, "outputs", exp_name, "lora_adapter")
     if not os.path.exists(os.path.join(lora_path, "adapter_model.safetensors")):
-        print(f"  [{exp_name}] adapter 없음 → dev 추론 스킵")
-        return
+        print(f"  [{exp_name}] adapter 없음 → dev 추론 불가")
+        return False
 
-    print(f"\n  [{exp_name}] dev 추론 시작 (adapter 있음, pred 없음)...")
-    adapter_cfg = json.load(open(os.path.join(lora_path, "adapter_config.json")))
-    base_model_name = adapter_cfg["base_model_name_or_path"]
-    model, tokenizer = _load_model_and_tokenizer(lora_path, base_model_name)
-
-    dev_df = pd.read_csv(os.path.join(DATA_PATH, "dev.csv"))
-    preds = []
-    for _, row in tqdm(dev_df.iterrows(), total=len(dev_df),
-                       desc=f"dev inference [{exp_name}]"):
-        messages = [
-            {"role": "system", "content": QA_SYSTEM},
-            {"role": "user",   "content": QA_USER.format(dialogue=row["dialogue"])},
-        ]
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False,
-            add_generation_prompt=True, enable_thinking=False,
-        )
-        inputs = tokenizer(
-            text, return_tensors="pt",
-            truncation=True, max_length=MAX_SEQ_LENGTH
-        ).to(next(model.parameters()).device)
-        with torch.no_grad():
-            out = model.generate(
-                **inputs, max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False, pad_token_id=tokenizer.eos_token_id,
-            )
-        generated = out[0][inputs["input_ids"].shape[1]:]
-        summary = tokenizer.decode(generated, skip_special_tokens=True).strip()
-        preds.append(postprocess(summary))
-
-    os.makedirs(PRED_PATH, exist_ok=True)
-    dev_df.assign(pred_summary=preds).to_csv(pred_file, index=False)
-    print(f"  dev 추론 저장: {pred_file}")
-
-    del model
-    gc.collect()
-    torch.cuda.empty_cache()
+    print(f"\n  [{exp_name}] dev 추론 시작 (subprocess, batch_size={batch_size})...")
+    dev_csv = os.path.join(DATA_PATH, "dev.csv")
+    ok = call_worker(lora_path, dev_csv, pred_file, mode="dev", batch_size=batch_size)
+    if ok:
+        print(f"  [{exp_name}] dev 추론 완료: {pred_file}")
+    else:
+        print(f"  [{exp_name}] dev 추론 실패")
+    return ok
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # A/B 비교 → 최고 실험 결정
 # ──────────────────────────────────────────────────────────────────────────────
-def pick_best_experiment(exp_names: List[str]) -> str:
-    # 누락된 dev 추론 먼저 실행
+def pick_best_experiment(exp_names: List[str], batch_size: int) -> str:
     for name in exp_names:
-        run_dev_inference_if_missing(name)
+        run_dev_inference_if_missing(name, batch_size=batch_size)
 
     dev_df = pd.read_csv(os.path.join(DATA_PATH, "dev.csv"))
     results = []
     for name in exp_names:
         pred_file = os.path.join(PRED_PATH, f"dev_{name}_qa_style.csv")
         if not os.path.exists(pred_file):
-            print(f"[경고] {name} dev 추론 파일 없음 → 비교에서 제외")
+            print(f"[경고] {name} dev 결과 없음 → 비교 제외")
             continue
         preds = pd.read_csv(pred_file)["pred_summary"].tolist()
         golds = dev_df["summary"].tolist()
@@ -172,114 +136,14 @@ def pick_best_experiment(exp_names: List[str]) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 추론 (표준 HF + PEFT — Unsloth fast kernel 우회)
-# ──────────────────────────────────────────────────────────────────────────────
-def _load_model_and_tokenizer(lora_path: str, base_model_name: str):
-    """
-    Unsloth FastLanguageModel로 base 로드 후 PEFT adapter 적용.
-    - AutoModelForCausalLM 사용 시 Unsloth 전역 패치가 apply_qkv 없음 오류 유발
-    - FastLanguageModel.for_inference() 미호출 (RoPE shape mismatch 버그 우회)
-    """
-    from unsloth import FastLanguageModel
-    from peft import PeftModel
-
-    print(f"  FastLanguageModel 로드: {base_model_name}")
-    base_model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=base_model_name,
-        max_seq_length=MAX_SEQ_LENGTH,
-        load_in_4bit=True,
-        load_in_8bit=False,
-        full_finetuning=False,
-    )
-    print(f"  PEFT adapter 로드: {lora_path}")
-    model = PeftModel.from_pretrained(base_model, lora_path)
-    # for_inference() 호출 금지 — Qwen3 RoPE shape mismatch 버그
-    model.eval()
-
-    tokenizer.padding_side = "left"
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    return model, tokenizer
-
-
-def run_inference(lora_path: str, test_df: pd.DataFrame, out_csv: str,
-                  batch_size: int = 4):
-    adapter_cfg = json.load(open(os.path.join(lora_path, "adapter_config.json")))
-    base_model_name = adapter_cfg["base_model_name_or_path"]
-    print(f"  base model : {base_model_name}")
-    print(f"  adapter    : {lora_path}")
-    print(f"  샘플 수    : {len(test_df):,}개  batch_size={batch_size}")
-
-    model, tokenizer = _load_model_and_tokenizer(lora_path, base_model_name)
-
-    # 전체 텍스트 준비
-    texts = []
-    for _, row in test_df.iterrows():
-        messages = [
-            {"role": "system", "content": QA_SYSTEM},
-            {"role": "user",   "content": QA_USER.format(dialogue=row["dialogue"])},
-        ]
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False,
-            add_generation_prompt=True, enable_thinking=False,
-        )
-        texts.append(text)
-
-    preds = []
-    total_batches = (len(texts) + batch_size - 1) // batch_size
-    for i in tqdm(range(0, len(texts), batch_size),
-                  total=total_batches, desc="test inference (batch)"):
-        batch_texts = texts[i:i + batch_size]
-        inputs = tokenizer(
-            batch_texts, return_tensors="pt",
-            padding=True, truncation=True, max_length=MAX_SEQ_LENGTH
-        )
-        # device 이동
-        device = next(model.parameters()).device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            out = model.generate(
-                **inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False,
-                pad_token_id=tokenizer.eos_token_id,
-            )
-        # 입력 길이만큼 제거
-        input_len = inputs["input_ids"].shape[1]
-        for seq in out:
-            generated = seq[input_len:]
-            summary = tokenizer.decode(generated, skip_special_tokens=True).strip()
-            preds.append(postprocess(summary))
-
-    del model, base_model
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    # 제출 형식으로 저장
-    submission = pd.DataFrame({
-        "fname": test_df["fname"],
-        "summary": preds,
-    })
-    submission.to_csv(out_csv, index=True)
-    print(f"\n제출 파일 저장: {out_csv}  ({len(submission):,}행)")
-    return preds
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # 메인
 # ──────────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--exp", type=str, default=None,
-        help="사용할 실험 이름 (예: exp_A_r64_a128_lr2e4). 미지정 시 A/B 자동 비교."
-    )
-    parser.add_argument(
-        "--batch_size", type=int, default=4,
-        help="배치 추론 크기 (기본값: 4). OOM 발생 시 2 또는 1로 줄이세요."
-    )
+    parser.add_argument("--exp", type=str, default=None,
+                        help="실험 이름 지정 (미지정 시 A/B 자동 비교)")
+    parser.add_argument("--batch_size", type=int, default=4,
+                        help="배치 크기 (기본 4, OOM 시 2 또는 1)")
     args = parser.parse_args()
 
     os.makedirs(PRED_PATH, exist_ok=True)
@@ -289,35 +153,43 @@ def main():
 
     if args.exp:
         best_exp = args.exp
-        print(f"지정된 실험 사용: {best_exp}")
+        print(f"지정된 실험: {best_exp}")
     else:
         print("=" * 60)
         print("A/B 실험 dev ROUGE 비교")
         print("=" * 60)
-        best_exp = pick_best_experiment(available_exps)
+        best_exp = pick_best_experiment(available_exps, batch_size=args.batch_size)
 
-    # ── 2. LoRA adapter 경로 확인 ────────────────────────────────────────────
+    # ── 2. adapter 확인 ──────────────────────────────────────────────────────
     lora_path = os.path.join(SCRIPT_DIR, "outputs", best_exp, "lora_adapter")
-    adapter_file = os.path.join(lora_path, "adapter_model.safetensors")
-    if not os.path.exists(adapter_file):
-        raise FileNotFoundError(
-            f"LoRA adapter 없음: {adapter_file}\n"
-            f"실험 {best_exp}의 학습이 완료되지 않았습니다."
-        )
+    if not os.path.exists(os.path.join(lora_path, "adapter_model.safetensors")):
+        raise FileNotFoundError(f"LoRA adapter 없음: {lora_path}")
 
-    # ── 3. 이미 test 추론 완료 확인 ─────────────────────────────────────────
+    # ── 3. test 추론 중복 확인 ───────────────────────────────────────────────
     out_csv = os.path.join(PRED_PATH, f"test_{best_exp}_qa_style.csv")
     if os.path.exists(out_csv):
         print(f"test 추론 결과 이미 존재: {out_csv}")
         print("재실행하려면 해당 파일을 삭제 후 재시도하세요.")
         return
 
-    # ── 4. test 추론 ─────────────────────────────────────────────────────────
-    test_df = pd.read_csv(os.path.join(DATA_PATH, "test.csv"))
-    print(f"\n[test 추론 시작]  실험: {best_exp}  샘플: {len(test_df):,}개")
+    # ── 4. test 추론 (subprocess) ────────────────────────────────────────────
+    test_csv = os.path.join(DATA_PATH, "test.csv")
+    test_df  = pd.read_csv(test_csv)
+    print(f"\n[test 추론 시작]  {best_exp}  샘플: {len(test_df):,}개  batch_size={args.batch_size}")
     print("=" * 60)
-    run_inference(lora_path, test_df, out_csv, batch_size=args.batch_size)
-    print("\n완료!")
+
+    ok = call_worker(lora_path, test_csv, out_csv, mode="test", batch_size=args.batch_size)
+
+    if ok:
+        print(f"\n완료! 제출 파일: {out_csv}")
+    else:
+        print("\n[오류] batch_size=4 실패 → batch_size=1로 재시도...")
+        ok = call_worker(lora_path, test_csv, out_csv, mode="test", batch_size=1)
+        if ok:
+            print(f"\n완료 (batch_size=1)! 제출 파일: {out_csv}")
+        else:
+            print("\n[오류] test 추론 최종 실패. 로그를 확인하세요.")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

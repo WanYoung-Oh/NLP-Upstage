@@ -205,25 +205,39 @@ TTA 오버헤드(2× 추론)는 점수 이득이 없으므로, 빠른 실험 시
 | `per_device_batch` × `grad_accum` | 1 × 32 = effective bs 32 |
 | Best checkpoint | epoch 1 (step 542), eval_loss=0.7034 |
 
-### 5-A. epoch=1 스크리닝 스윕 — 🔄 진행 중
+### 5-A. epoch=1 스크리닝 스윕 — ✅ 완료 (A·B, C 제외)
 
 **실행 스크립트**: `LLM/response_only_SFT/run_qlora_sweep.py`
 
-| 실험 | `lora_r` | `lora_alpha` | `lr` | 변경 이유 |
-|------|----------|--------------|------|-----------|
-| **A** | 64 | 128 (r×2) | 2e-4 | rank 증가 → 표현력↑, alpha/r=2 표준화 |
-| **B** | 32 | 64 (r×2) | 1e-4 | alpha 보정 + 보수적 lr |
-| **C** | 32 | 64 (r×2) | 3e-4 | 공격적 lr 효과 비교 |
+| 실험 | `lora_r` | `lora_alpha` | `lr` | 상태 | train_loss | eval_loss |
+|------|----------|--------------|------|------|-----------|-----------|
+| **A** | 64 | 128 (r×2) | 2e-4 | ✅ 완료 | — | 0.7034 |
+| **B** | 32 | 64 (r×2) | 1e-4 | ✅ 완료 | 0.6937 | 0.6981 |
+| ~~C~~ | ~~32~~ | ~~64~~ | ~~3e-4~~ | ❌ 제외 (사용자 결정) | — | — |
 
 - `eval_steps` = steps_per_epoch // 2 (epoch 내 2회 평가)
 - 각 실험 완료 후 dev 499샘플 qa_style 단독 추론 → Combined ROUGE 자동 출력
-- 결과: `prediction/qlora_sweep_results.csv`
 
-**과적합 경고**: epoch 1 이후 오히려 MBR 이득이 상쇄됨. dev 곡선 필수 확인.
+**dev ROUGE 비교 결과** (mecab 형태소 기반, dev 499샘플):
+
+| 실험 | R1 | R2 | RL | Combined | 비고 |
+|------|-----|-----|-----|---------|------|
+| A (r=64, lr=2e-4) | 0.5267 | 0.3445 | 0.4706 | 1.3417 | |
+| **B (r=32, lr=1e-4)** | **0.5305** | **0.3504** | **0.4755** | **1.3563** | ✅ 최고 |
+
+→ **B가 모든 지표에서 A를 상회** (+0.0146 Combined). **exp_B** adapter로 test 추론 진행.
+
+- adapter 저장: `LLM/response_only_SFT/outputs/exp_B_r32_a64_lr1e4/lora_adapter/`
+- test 추론 스크립트: `LLM/response_only_SFT/run_test_inference.py` (subprocess 격리 방식)
+- 추론 worker: `LLM/response_only_SFT/inference_worker.py` (Unsloth 완전 차단)
+
+> ⚠️ **Unsloth 추론 버그 기록**: `unsloth/qwen3-14b-unsloth-bnb-4bit` 모델은 Unsloth 설치 환경에서
+> `FastLanguageModel.for_inference()` 호출 시 RoPE shape mismatch, `AutoModelForCausalLM` 사용 시
+> `apply_qkv` 누락 오류 발생. **해결책**: `inference_worker.py`를 별도 subprocess로 실행해 Unsloth 임포트 완전 차단 후 `AutoModelForCausalLM` + `PeftModel` 사용.
 
 ### 5-B. epoch 연장 — ⏳ 대기 중
 
-스크리닝 결과 베이스 대비 개선된 조합만 epoch 2~3으로 연장 예정.
+스크리닝 결과 B(r=32, lr=1e-4)가 최고. 필요 시 epoch 2~3으로 연장 예정.
 
 ---
 

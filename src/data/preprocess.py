@@ -103,7 +103,7 @@ def apply_tta(dialogues: list[str], n_ways: int = 2) -> list[list[str]]:
 
 def filter_by_length(
     df: pd.DataFrame,
-    dialogue_max: int = 819,  # train max 2,168, dev max 1,269, test max 2,275
+    dialogue_max: int = 830,  # train max 2,168, dev max 1,269, test max 2,275
     summary_min: int = 50,     # train min 13, dev min 29
     summary_max: int = 250,    # train max 376, dev max 283
 ) -> pd.DataFrame:

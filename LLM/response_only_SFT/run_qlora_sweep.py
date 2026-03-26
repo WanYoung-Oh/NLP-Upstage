@@ -67,7 +67,8 @@ DATA_PATH        = os.path.join(SCRIPT_DIR, "data")
 EXPERIMENTS = [
     {"name": "exp_A_r64_a128_lr2e4", "LORA_R": 64,  "LORA_ALPHA": 128, "LEARNING_RATE": 2e-4},
     {"name": "exp_B_r32_a64_lr1e4",  "LORA_R": 32,  "LORA_ALPHA": 64,  "LEARNING_RATE": 1e-4},
-    {"name": "exp_C_r32_a64_lr3e4",  "LORA_R": 32,  "LORA_ALPHA": 64,  "LEARNING_RATE": 3e-4},
+    # exp_C는 사용자 요청으로 제외 (2026-03-26)
+    # {"name": "exp_C_r32_a64_lr3e4",  "LORA_R": 32,  "LORA_ALPHA": 64,  "LEARNING_RATE": 3e-4},
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────

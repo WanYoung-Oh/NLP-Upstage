@@ -85,15 +85,75 @@ def compute_rouge_combined(preds: List[str], golds: List[str]) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# dev 추론 (누락된 경우 실행)
+# ──────────────────────────────────────────────────────────────────────────────
+def run_dev_inference_if_missing(exp_name: str):
+    """dev 추론 CSV가 없으면 추론 실행 후 저장"""
+    pred_file = os.path.join(PRED_PATH, f"dev_{exp_name}_qa_style.csv")
+    if os.path.exists(pred_file):
+        print(f"  [{exp_name}] dev 추론 파일 존재 → 스킵")
+        return
+
+    lora_path = os.path.join(
+        os.path.dirname(PRED_PATH), "outputs", exp_name, "lora_adapter"
+    )
+    if not os.path.exists(os.path.join(lora_path, "adapter_model.safetensors")):
+        print(f"  [{exp_name}] adapter 없음 → dev 추론 스킵")
+        return
+
+    print(f"\n  [{exp_name}] dev 추론 시작 (adapter 있음, pred 없음)...")
+    adapter_cfg = json.load(open(os.path.join(lora_path, "adapter_config.json")))
+    base_model_name = adapter_cfg["base_model_name_or_path"]
+    model, tokenizer = _load_model_and_tokenizer(lora_path, base_model_name)
+
+    dev_df = pd.read_csv(os.path.join(DATA_PATH, "dev.csv"))
+    preds = []
+    for _, row in tqdm(dev_df.iterrows(), total=len(dev_df),
+                       desc=f"dev inference [{exp_name}]"):
+        messages = [
+            {"role": "system", "content": QA_SYSTEM},
+            {"role": "user",   "content": QA_USER.format(dialogue=row["dialogue"])},
+        ]
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False,
+            add_generation_prompt=True, enable_thinking=False,
+        )
+        inputs = tokenizer(
+            text, return_tensors="pt",
+            truncation=True, max_length=MAX_SEQ_LENGTH
+        ).to(next(model.parameters()).device)
+        with torch.no_grad():
+            out = model.generate(
+                **inputs, max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=False, pad_token_id=tokenizer.eos_token_id,
+            )
+        generated = out[0][inputs["input_ids"].shape[1]:]
+        summary = tokenizer.decode(generated, skip_special_tokens=True).strip()
+        preds.append(postprocess(summary))
+
+    os.makedirs(PRED_PATH, exist_ok=True)
+    dev_df.assign(pred_summary=preds).to_csv(pred_file, index=False)
+    print(f"  dev 추론 저장: {pred_file}")
+
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # A/B 비교 → 최고 실험 결정
 # ──────────────────────────────────────────────────────────────────────────────
 def pick_best_experiment(exp_names: List[str]) -> str:
+    # 누락된 dev 추론 먼저 실행
+    for name in exp_names:
+        run_dev_inference_if_missing(name)
+
     dev_df = pd.read_csv(os.path.join(DATA_PATH, "dev.csv"))
     results = []
     for name in exp_names:
         pred_file = os.path.join(PRED_PATH, f"dev_{name}_qa_style.csv")
         if not os.path.exists(pred_file):
-            print(f"[경고] {name} dev 추론 파일 없음: {pred_file}")
+            print(f"[경고] {name} dev 추론 파일 없음 → 비교에서 제외")
             continue
         preds = pd.read_csv(pred_file)["pred_summary"].tolist()
         golds = dev_df["summary"].tolist()
@@ -114,37 +174,44 @@ def pick_best_experiment(exp_names: List[str]) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 # 추론 (표준 HF + PEFT — Unsloth fast kernel 우회)
 # ──────────────────────────────────────────────────────────────────────────────
-def run_inference(lora_path: str, test_df: pd.DataFrame, out_csv: str,
-                  batch_size: int = 4):
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+def _load_model_and_tokenizer(lora_path: str, base_model_name: str):
+    """
+    Unsloth FastLanguageModel로 base 로드 후 PEFT adapter 적용.
+    - AutoModelForCausalLM 사용 시 Unsloth 전역 패치가 apply_qkv 없음 오류 유발
+    - FastLanguageModel.for_inference() 미호출 (RoPE shape mismatch 버그 우회)
+    """
+    from unsloth import FastLanguageModel
     from peft import PeftModel
 
-    adapter_cfg = json.load(open(os.path.join(lora_path, "adapter_config.json")))
-    base_model_name = adapter_cfg["base_model_name_or_path"]
-    print(f"  base model : {base_model_name}")
-    print(f"  adapter    : {lora_path}")
-    print(f"  test 샘플  : {len(test_df):,}개  batch_size={batch_size}")
-
-    bnb_config = BitsAndBytesConfig(
+    print(f"  FastLanguageModel 로드: {base_model_name}")
+    base_model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=base_model_name,
+        max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
+        load_in_8bit=False,
+        full_finetuning=False,
     )
-    tokenizer = AutoTokenizer.from_pretrained(lora_path)
-    # 배치 추론: left-padding 필수
+    print(f"  PEFT adapter 로드: {lora_path}")
+    model = PeftModel.from_pretrained(base_model, lora_path)
+    # for_inference() 호출 금지 — Qwen3 RoPE shape mismatch 버그
+    model.eval()
+
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
-    model = PeftModel.from_pretrained(base_model, lora_path)
-    model.eval()
+    return model, tokenizer
+
+
+def run_inference(lora_path: str, test_df: pd.DataFrame, out_csv: str,
+                  batch_size: int = 4):
+    adapter_cfg = json.load(open(os.path.join(lora_path, "adapter_config.json")))
+    base_model_name = adapter_cfg["base_model_name_or_path"]
+    print(f"  base model : {base_model_name}")
+    print(f"  adapter    : {lora_path}")
+    print(f"  샘플 수    : {len(test_df):,}개  batch_size={batch_size}")
+
+    model, tokenizer = _load_model_and_tokenizer(lora_path, base_model_name)
 
     # 전체 텍스트 준비
     texts = []

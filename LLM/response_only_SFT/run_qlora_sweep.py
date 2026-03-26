@@ -349,29 +349,24 @@ def run_experiment(exp: Dict) -> Dict:
                 "lr": LR, "train_sec": train_time, **scores}
 
     print(f"\n[{exp_name}] dev 추론 시작 (qa_style, greedy)...")
-    # 표준 HF + PEFT로 로드 (Unsloth fast inference kernel의 Qwen3 RoPE 버그 우회)
+    # FastLanguageModel + PEFT 로드
+    # - AutoModelForCausalLM 사용 시: Unsloth 전역 패치가 apply_qkv 없음 오류 유발
+    # - FastLanguageModel.for_inference() 미호출: Qwen3 RoPE shape mismatch 우회
     import json
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import PeftModel
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-    )
     adapter_cfg = json.load(open(os.path.join(lora_path, "adapter_config.json")))
     base_model_name = adapter_cfg["base_model_name_or_path"]
-
     print(f"  base model: {base_model_name}")
-    tokenizer_inf = AutoTokenizer.from_pretrained(lora_path)
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
+
+    base_model_inf, tokenizer_inf = FastLanguageModel.from_pretrained(
+        model_name=base_model_name,
+        max_seq_length=MAX_SEQ_LENGTH,
+        load_in_4bit=True,
+        load_in_8bit=False,
+        full_finetuning=False,
     )
-    model_inf = PeftModel.from_pretrained(base_model, lora_path)
+    model_inf = PeftModel.from_pretrained(base_model_inf, lora_path)
     model_inf.eval()
 
     dev_df = pd.read_csv(os.path.join(DATA_PATH, "dev.csv"))
@@ -418,7 +413,7 @@ def run_experiment(exp: Dict) -> Dict:
     print(f"{'='*60}\n")
 
     # 메모리 해제 (gc 강제 실행으로 CUDA 메모리 완전 반환)
-    del model_inf, base_model
+    del model_inf, base_model_inf
     gc.collect()
     torch.cuda.empty_cache()
 

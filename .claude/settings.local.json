@@ -12,7 +12,10 @@
       "Bash(sysctl hw.memsize)",
       "Bash(python -c \"\nimport sys; sys.path.insert\\(0, '.'\\)\nfrom hydra import compose, initialize_config_dir\nwith initialize_config_dir\\(config_dir='/Users/owy/Dev/NLP/conf', version_base=None\\):\n    cfg = compose\\(config_name='config', overrides=['training=mps']\\)\n\nt = cfg.training\nprint\\('per_device_train_batch_size:', t.per_device_train_batch_size\\)\nprint\\('per_device_eval_batch_size: ', t.per_device_eval_batch_size\\)\nprint\\('gradient_accumulation_steps:', t.gradient_accumulation_steps\\)\nprint\\('유효 배치 크기:', t.per_device_train_batch_size * t.gradient_accumulation_steps\\)\nprint\\('lr:', t.learning_rate, '/ epochs:', t.num_train_epochs\\)\n\" 2>&1)",
       "Bash(nvidia-smi:*)",
-      "Bash(python scripts/qwen_test_mbr_inference.py --model_path LLM/mbr_ensemble/r4b_response_only_ckpt --test_csv data/test.csv --output_csv prediction/qwen_test_mbr_top5.csv)"
+      "Bash(python scripts/qwen_test_mbr_inference.py --model_path LLM/mbr_ensemble/r4b_response_only_ckpt --test_csv data/test.csv --output_csv prediction/qwen_test_mbr_top5.csv)",
+      "Bash(python3:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''run_qlora_sweep.py''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

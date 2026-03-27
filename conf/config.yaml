@@ -7,7 +7,7 @@ defaults:
 general:
   data_path: "data"
   checkpoints_root: "checkpoints"   # train.py / GroupKFoldTrainer 공통 checkpoint 루트
-  seed: 2026
+  seed: 42
 
 tokenizer:
   encoder_max_len: 512

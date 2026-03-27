@@ -248,27 +248,19 @@ def step2_simpo():
 # ── 공통 추론 함수 ────────────────────────────────────────────────────────────
 
 def _load_model_for_infer(base_path: str, adapter_path: str):
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-    from peft import PeftModel
+    """adapter_path(LoRA) 기준으로 Unsloth FastLanguageModel 로드.
+    AutoModelForCausalLM 대신 FastLanguageModel 사용 → apply_qkv 패치 보장."""
+    from unsloth import FastLanguageModel
 
-    bnb = BitsAndBytesConfig(
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=adapter_path,   # adapter_config.json이 base 경로를 자동 참조
+        max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
+        device_map={"": 0},
     )
-    tokenizer = AutoTokenizer.from_pretrained(adapter_path)
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    base = AutoModelForCausalLM.from_pretrained(
-        base_path,
-        quantization_config=bnb,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
-    model = PeftModel.from_pretrained(base, adapter_path)
     model.eval()
     return model, tokenizer
 
@@ -291,7 +283,7 @@ def _run_infer(model, tokenizer, label: str, pred_prefix: str):
             ))
 
         preds = []
-        bs = 4
+        bs = 1   # Unsloth fast_forward_inference 배치 패딩 shape 충돌 우회
         device = next(model.parameters()).device
         for i in tqdm(range(0, len(texts), bs), desc=f"[{label}/{mode}]"):
             batch = texts[i:i+bs]
@@ -304,6 +296,7 @@ def _run_infer(model, tokenizer, label: str, pred_prefix: str):
                     **inputs,
                     max_new_tokens=MAX_NEW_TOKENS,
                     do_sample=False,
+                    use_cache=False,  # Unsloth fast_forward_inference RoPE shape 버그 우회
                     pad_token_id=tokenizer.eos_token_id,
                 )
             input_len = inputs["input_ids"].shape[1]
@@ -324,11 +317,6 @@ def _run_infer(model, tokenizer, label: str, pred_prefix: str):
         out_df.to_csv(output_csv, index=False)
         print(f"  저장: {output_csv}")
 
-    infer_csv(
-        os.path.join(DATA_DIR, "dev.csv"),
-        os.path.join(PRED_DIR, f"{pred_prefix}_dev.csv"),
-        "dev",
-    )
     infer_csv(
         os.path.join(DATA_DIR, "test.csv"),
         os.path.join(PRED_DIR, f"{pred_prefix}_test.csv"),

@@ -5,6 +5,7 @@
 학습된 모델을 사용하여 테스트 데이터에 대한 요약을 생성합니다.
 """
 
+import os
 import torch
 from tqdm import tqdm
 from typing import Optional, Dict, List
@@ -97,18 +98,19 @@ class InferencePipeline:
         
         return summary
     
-    def generate_with_prompts(self, df, prompt_variants=None, use_topic=False, 
-                             max_new_tokens=128, verbose=True):
+    def generate_with_prompts(self, df, prompt_variants=None, use_topic=False,
+                             max_new_tokens=128, variants_output_dir=None, verbose=True):
         """
         여러 프롬프트로 전체 데이터셋 추론
-        
+
         Args:
             df: 데이터프레임 (dialogue 컬럼 필수, topic 컬럼 선택)
             prompt_variants: 사용할 프롬프트 변형 리스트 (None이면 전체)
             use_topic: topic 프롬프트 사용 여부
             max_new_tokens: 최대 생성 토큰 수
+            variants_output_dir: 변형별 중간 결과 저장 디렉토리 (None이면 저장 안 함)
             verbose: 진행 상황 출력 여부
-        
+
         Returns:
             {prompt_name: [predictions]} 딕셔너리
         """
@@ -116,25 +118,28 @@ class InferencePipeline:
         if prompt_variants is None:
             all_variants = get_all_prompt_variants()
             prompt_variants = list(all_variants.keys())
-        
+
+        if variants_output_dir:
+            os.makedirs(variants_output_dir, exist_ok=True)
+
         all_predictions = {}
-        
+
         for variant_name in prompt_variants:
             if verbose:
                 print(f"\n{'='*80}")
                 print(f"프롬프트 변형: {variant_name}")
                 print(f"{'='*80}")
-            
+
             predictions = []
-            
+
             iterator = df.iterrows()
             if verbose:
                 iterator = tqdm(list(df.iterrows()), desc=f"Generating ({variant_name})")
-            
+
             for idx, row in iterator:
                 dialogue = row['dialogue']
                 topic = row.get('topic', '') if use_topic else ''
-                
+
                 # 요약 생성
                 summary = self.generate_single(
                     dialogue=dialogue,
@@ -143,19 +148,28 @@ class InferencePipeline:
                     max_new_tokens=max_new_tokens,
                     do_sample=False,  # Greedy 디코딩
                 )
-                
+
                 predictions.append(summary)
-            
+
             all_predictions[variant_name] = predictions
-            
+
             if verbose:
                 print(f"✓ {variant_name}: {len(predictions)}개 요약 생성 완료")
-        
+
+            # 변형 완료 즉시 저장
+            if variants_output_dir:
+                variant_file = os.path.join(variants_output_dir, f"{variant_name}.csv")
+                pd.DataFrame({"fname": df["fname"], "summary": predictions}).to_csv(
+                    variant_file, index=False
+                )
+                if verbose:
+                    print(f"✓ 변형 저장: {variant_file}")
+
         return all_predictions
     
-    def run(self, test_df, use_mbr=True, use_topic=False, 
-            prompt_variants=None, max_new_tokens=128, 
-            output_file=None, verbose=True):
+    def run(self, test_df, use_mbr=True, use_topic=False,
+            prompt_variants=None, max_new_tokens=128,
+            output_file=None, variants_output_dir=None, verbose=True):
         """
         전체 추론 파이프라인 실행
         
@@ -181,15 +195,16 @@ class InferencePipeline:
             print(f"프롬프트 변형: {len(prompt_variants) if prompt_variants else '전체 (8개)'}")
             print("=" * 80)
         
-        # 1. 여러 프롬프트로 추론
+        # 1. 여러 프롬프트로 추론 (변형 완료 즉시 저장 포함)
         all_predictions = self.generate_with_prompts(
             df=test_df,
             prompt_variants=prompt_variants,
             use_topic=use_topic,
             max_new_tokens=max_new_tokens,
+            variants_output_dir=variants_output_dir,
             verbose=verbose,
         )
-        
+
         # 2. MBR 앙상블 또는 단일 프롬프트 선택
         if use_mbr and len(all_predictions) > 1:
             if verbose:
@@ -228,8 +243,9 @@ class InferencePipeline:
         return final_predictions
 
 
-def quick_inference(model, tokenizer, test_csv_path, output_csv_path, 
-                   use_mbr=False, use_topic=False, prompt_variants=None):
+def quick_inference(model, tokenizer, test_csv_path, output_csv_path,
+                   use_mbr=False, use_topic=False, prompt_variants=None,
+                   variants_output_dir=None):
     """
     빠른 추론 함수 (편의 함수)
     
@@ -266,6 +282,7 @@ def quick_inference(model, tokenizer, test_csv_path, output_csv_path,
         use_topic=use_topic,
         prompt_variants=prompt_variants,
         output_file=output_csv_path,
+        variants_output_dir=variants_output_dir,
         verbose=True,
     )
     

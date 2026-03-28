@@ -228,6 +228,9 @@ def run_experiment(exp: Dict) -> Dict:
             load_in_4bit=True,
             dtype=torch.bfloat16,
         )
+        # Qwen3.5-9B는 VL 모델 → Processor 반환 시 tokenizer 추출
+        if hasattr(tokenizer, "tokenizer"):
+            tokenizer = tokenizer.tokenizer
 
         # ── 2. LoRA 설정 ──────────────────────────────────────────────────────
         model = FastModel.get_peft_model(
@@ -384,6 +387,9 @@ def run_experiment(exp: Dict) -> Dict:
         load_in_4bit=True,
         dtype=torch.bfloat16,
     )
+    # Qwen3.5-9B VL Processor → tokenizer 추출
+    if hasattr(tokenizer_inf, "tokenizer"):
+        tokenizer_inf = tokenizer_inf.tokenizer
     model_inf = PeftModel.from_pretrained(base_model_inf, lora_path)
     model_inf.eval()
 

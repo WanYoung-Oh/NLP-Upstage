@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import pandas as pd
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import PeftModel
 
 from prompts.inference import InferencePipeline, quick_inference
@@ -78,11 +78,14 @@ def _resolve_output_path(path_str: str) -> Path:
 def _load_model_and_tokenizer(model_path: str):
     """
     모델 경로가 full model인지 LoRA adapter인지 자동 판별하여 로드합니다.
+    adapter인 경우 4-bit NF4 양자화로 베이스 모델을 로드합니다.
     """
     resolved_model_path = _resolve_input_path(model_path)
 
-    # tokenizer는 adapter 경로에도 포함되어 있으므로 우선 해당 경로에서 로드
     tokenizer = AutoTokenizer.from_pretrained(str(resolved_model_path))
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     adapter_config_path = resolved_model_path / "adapter_config.json"
     if adapter_config_path.exists():
@@ -96,12 +99,19 @@ def _load_model_and_tokenizer(model_path: str):
             )
 
         print(f"어댑터 체크포인트 감지: {resolved_model_path}")
-        print(f"베이스 모델 로드: {base_model_name}")
+        print(f"베이스 모델 로드 (4-bit NF4): {base_model_name}")
 
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
-            device_map=_causal_lm_device_map(),
-            torch_dtype="auto",
+            quantization_config=bnb_config,
+            device_map="auto",
+            torch_dtype=torch.bfloat16,
             trust_remote_code=True,
         )
         model = PeftModel.from_pretrained(base_model, str(resolved_model_path))
@@ -141,6 +151,8 @@ def main():
         choices=prompt_variant_choices,
         help="비MBR 추론 시 사용할 단일 프롬프트 변형",
     )
+    parser.add_argument("--variants_dir", type=str, default=None,
+                       help="변형별 중간 결과 저장 디렉토리 (MBR 사용 시 각 변형 CSV 저장)")
     parser.add_argument("--use_topic", action="store_true",
                        help="Topic 정보 사용")
     parser.add_argument("--max_new_tokens", type=int, default=128,
@@ -176,6 +188,7 @@ def main():
             selected_prompt_variants = [args.prompt_variant]  # 단일 프롬프트 실행
             print(f"실행 설정: 단일 프롬프트 ({args.prompt_variant})")
         
+        variants_dir = str(_resolve_output_path(args.variants_dir)) if args.variants_dir else None
         predictions = quick_inference(
             model=model,
             tokenizer=tokenizer,
@@ -184,6 +197,7 @@ def main():
             use_mbr=args.use_mbr,
             use_topic=args.use_topic,
             prompt_variants=selected_prompt_variants,
+            variants_output_dir=variants_dir,
         )
         
         print(f"\n✓ 추론 완료: {len(predictions)}개 요약 생성")

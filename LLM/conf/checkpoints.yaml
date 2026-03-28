@@ -75,7 +75,7 @@ checkpoints:
 
   q35_A:
     path: response_only_SFT/outputs/q35_A_r32_a64_lr1e4/lora_adapter
-    base_model: Qwen/Qwen3-5B
+    base_model: Qwen/Qwen3.5-9B
     size: 5B
     train_method: response_only_sft
     lora_rank: 32
@@ -86,7 +86,7 @@ checkpoints:
 
   q35_B_v2:
     path: response_only_SFT/outputs/q35_B_r64_a128_lr2e4_v2/checkpoint-168
-    base_model: Qwen/Qwen3-5B
+    base_model: Qwen/Qwen3.5-9B
     size: 5B
     train_method: response_only_sft
     lora_rank: 64

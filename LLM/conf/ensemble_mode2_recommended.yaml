@@ -1,0 +1,41 @@
+# conf/ensemble_mode2_recommended.yaml
+# Mode 2: 체크포인트 × 프롬프트 전체 조합 → MBR 선택
+# 총 후보 수: 4 ckpt × 7 prompts = 28
+# 예상 소요 시간: ~3.5h (RTX 3090, 14B × 4)
+#
+# 목적: 체크포인트 다양성 + 프롬프트 다양성 두 축을 동시 활용. 핵심 제출 전략.
+# 대상: lb_confirmed: true 체크포인트 4개만 사용
+
+mode: 2
+description: "Mode 2 권장: 상위 4 체크포인트 × 7 프롬프트 = 28 후보"
+
+checkpoints:
+  - name: r4b_response_only      # conf/checkpoints.yaml 참조
+    weight: 1.2
+  - name: qwen14b_lora_v1
+    weight: 1.5
+  - name: exp_B_14b
+    weight: 1.0
+  - name: exp_A_14b
+    weight: 1.0
+
+prompts:
+  - base
+  - qa_style
+  - topic
+  - narrative
+  - observer
+  - gold_mimic
+  - length_constrained
+
+mbr:
+  utility: rouge_multi           # rouge-1, rouge-2, rouge-l 평균 (메트릭 편향 감소)
+  use_mecab: true                # 한국어 형태소 분석 필수 — 대회 평가 기준(MeCab)과 동일하게 유지
+                                 # MeCab 미설치 시 공백 기반 토크나이징으로 폴백되나 점수 차이 발생 가능
+  weighted: true
+  asymmetric: false              # greedy only → 표준 MBR (H = R)
+
+output:
+  save_per_checkpoint: true      # 체크포인트별 예측 CSV 저장 (--resume 복구용)
+  save_per_combo: false          # (ckpt × prompt) 모든 조합 저장 여부 (디버깅 시 true)
+  output_dir: outputs/ensemble_mode2_recommended/

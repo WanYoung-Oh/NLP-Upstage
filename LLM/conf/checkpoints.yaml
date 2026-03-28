@@ -1,0 +1,96 @@
+# conf/checkpoints.yaml
+# 체크포인트 레지스트리 — 경로 관리 전용
+# 앙상블 실행 설정(ensemble_mode*.yaml)에서 name으로 참조
+#
+# lb_confirmed: true  → 리더보드 제출로 상위 성능 확인된 체크포인트 (앙상블 대상)
+# lb_confirmed: false → 미확인 또는 하위 성능, 앙상블 파일에서 제외 권장
+
+checkpoints:
+
+  # ============================================================
+  # 리더보드 확인 상위 4개 — 앙상블 대상
+  # ============================================================
+
+  r4b_response_only:
+    path: response_only_SFT/r4b_response_only_ckpt
+    base_model: unsloth/qwen3-14b-unsloth-bnb-4bit
+    size: 14B
+    train_method: response_only_sft
+    lb_confirmed: true
+    dev_rouge1: 0.5716        # MBR 7-prompt 기준 측정값
+
+  qwen14b_lora_v1:
+    path: response_only_SFT/outputs/qwen3_14b_lora_sft/lora_adapter
+    base_model: unsloth/qwen3-14b-unsloth-bnb-4bit
+    size: 14B
+    train_method: response_only_sft
+    lora_rank: 64
+    lora_alpha: 128
+    lr: 2.0e-4
+    lb_confirmed: true
+    dev_rouge1: null          # 측정 후 기입
+
+  exp_B_14b:
+    path: response_only_SFT/outputs/exp_B_r32_a64_lr1e4/lora_adapter
+    base_model: unsloth/qwen3-14b-unsloth-bnb-4bit
+    size: 14B
+    train_method: response_only_sft
+    lora_rank: 32
+    lora_alpha: 64
+    lr: 1.0e-4
+    lb_confirmed: true
+    dev_rouge1: null
+
+  exp_A_14b:
+    path: response_only_SFT/outputs/exp_A_r64_a128_lr2e4/lora_adapter
+    base_model: unsloth/qwen3-14b-unsloth-bnb-4bit
+    size: 14B
+    train_method: response_only_sft
+    lora_rank: 64
+    lora_alpha: 128
+    lr: 2.0e-4
+    lb_confirmed: true
+    dev_rouge1: null
+
+  # ============================================================
+  # 미확인 체크포인트 — 등록만, 앙상블 파일에서는 제외
+  # 필요 시 비대칭 MBR의 H(hypothesis)에만 추가 가능
+  # ============================================================
+
+  simpo_v2:
+    path: simpo/outputs/simpo_v2_ckpt
+    base_model: unsloth/qwen3-14b-unsloth-bnb-4bit
+    size: 14B
+    train_method: simpo
+    lb_confirmed: false
+    dev_rouge1: null
+
+  baseline_14b:
+    path: baseline_sft/baseline_ckpt
+    base_model: unsloth/qwen3-14b-unsloth-bnb-4bit
+    size: 14B
+    train_method: sft
+    lb_confirmed: false
+    dev_rouge1: null
+
+  q35_A:
+    path: response_only_SFT/outputs/q35_A_r32_a64_lr1e4/lora_adapter
+    base_model: Qwen/Qwen3-5B
+    size: 5B
+    train_method: response_only_sft
+    lora_rank: 32
+    lora_alpha: 64
+    lr: 1.0e-4
+    lb_confirmed: false
+    dev_rouge1: null
+
+  q35_B_v2:
+    path: response_only_SFT/outputs/q35_B_r64_a128_lr2e4_v2/checkpoint-168
+    base_model: Qwen/Qwen3-5B
+    size: 5B
+    train_method: response_only_sft
+    lora_rank: 64
+    lora_alpha: 128
+    lr: 2.0e-4
+    lb_confirmed: false
+    dev_rouge1: null

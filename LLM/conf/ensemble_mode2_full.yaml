@@ -1,0 +1,44 @@
+# conf/ensemble_mode2_full.yaml
+# Mode 2 고품질: 체크포인트 × 프롬프트 + BERTScore utility
+# 총 후보 수: 4 ckpt × 7 prompts = 28
+# 예상 소요 시간: ~4h (RTX 3090, 14B × 4 + BERTScore 계산)
+#
+# mode2_recommended 대비 차이: utility를 BERTScore+ROUGE 복합으로 변경
+# BERTScore는 한국어 의미 유사도를 더 잘 포착하나 klue/roberta-base 모델 필요
+# 리더보드가 ROUGE 기반이라면 mode2_recommended가 더 직접적으로 최적화됨
+
+mode: 2
+description: "Mode 2 고품질: 상위 4 체크포인트 × 7 프롬프트 + BERTScore+ROUGE utility"
+
+checkpoints:
+  - name: r4b_response_only
+    weight: 1.2
+  - name: qwen14b_lora_v1
+    weight: 1.5
+  - name: exp_B_14b
+    weight: 1.0
+  - name: exp_A_14b
+    weight: 1.0
+
+prompts:
+  - base
+  - qa_style
+  - topic
+  - narrative
+  - observer
+  - gold_mimic
+  - length_constrained
+
+mbr:
+  utility: bertscore_rouge_combined   # BERTScore + ROUGE-multi 복합 (최고 품질)
+  bertscore_model: klue/roberta-base  # 한국어 형태소 구조를 학습한 KLUE 기반 모델
+                                      # 한국어 조사·어미 변화에 강건한 의미 유사도 측정
+  use_mecab: true                     # ROUGE 계산 시 MeCab 형태소 분석 필수
+                                      # BERTScore는 klue/roberta 자체 토크나이저 사용
+  weighted: true
+  asymmetric: false
+
+output:
+  save_per_checkpoint: true
+  save_per_combo: false
+  output_dir: outputs/ensemble_mode2_full/

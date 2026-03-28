@@ -1,0 +1,58 @@
+# conf/ensemble_mode3_sampling.yaml
+# Mode 3: Sampling 기반 다양성 + 비대칭 MBR
+# 총 후보 수: 4 ckpt × 3 prompts × (1 greedy + 3 samples) = 40
+# 예상 소요 시간: ~5h (RTX 3090, 14B × 4, sampling 포함)
+#
+# 핵심 아이디어:
+#   - H (hypothesis pool) = greedy + sampled 전체 (다양한 후보 탐색)
+#   - R (reference pool)  = greedy만 (신뢰할 수 있는 채점 기준)
+#   - 비대칭 MBR: sampling 후보의 저품질 결과가 reference를 오염시키지 않음
+#
+# 한국어 특이사항:
+#   - 조사(은/는/이/가)·어미 변화가 크므로 temperature 0.7 권장
+#   - 너무 높은 temperature(1.0+)는 문법적으로 올바르지 않은 요약 생성 가능
+#   - MeCab 형태소 분석으로 조사·어미 포함한 정확한 ROUGE 계산 필수
+
+mode: 3
+description: "Mode 3 Sampling+비대칭: 4 ckpt × 3 prompts × 4 후보(greedy+sampling) = 40 후보"
+
+checkpoints:
+  - name: r4b_response_only
+    weight: 1.2
+  - name: qwen14b_lora_v1
+    weight: 1.5
+  - name: exp_B_14b
+    weight: 1.0
+  - name: exp_A_14b
+    weight: 1.0
+
+# sampling 포함 시 프롬프트 수를 줄여 총 시간 조절
+# 핵심 상위 3개 프롬프트 사용 (다양성 확보에 충분)
+prompts:
+  - qa_style                    # 최고 성능 단일 프롬프트
+  - base                        # 가장 안정적인 기본
+  - topic                       # 주제 활용으로 추가 다양성
+
+sampling:
+  num_samples: 3                # greedy 외 추가 샘플 수 (총 후보 = greedy + 3)
+  temperature: 0.7              # 한국어 생성 권장 온도: 다양성과 문법성 균형
+  top_p: 0.9                    # nucleus sampling (상위 90% 확률 질량 내에서 샘플링)
+  include_greedy: true          # greedy 결과를 H에 포함 (항상 true 권장)
+  seed: 42                      # 재현성을 위한 랜덤 시드
+
+mbr:
+  utility: rouge_multi          # rouge-1, rouge-2, rouge-l 평균
+  use_mecab: true               # 한국어 MeCab 형태소 분석 필수
+                                # 조사·어미 분리로 ROUGE 계산 정확도 향상
+                                # 대회 평가 기준과 동일 방식 유지를 위해 반드시 활성화
+  weighted: true
+  asymmetric: true              # 비대칭 MBR 활성화 (sampling 포함 시 필수)
+  reference_policy: greedy      # R = greedy 출력만 사용 (채점 기준 품질 보장)
+  # reference_policy 옵션:
+  #   greedy          : 모든 체크포인트의 greedy 결과만 R로 사용
+  #   top_checkpoints : 상위 N개 체크포인트 greedy만 R로 사용 (미확인 ckpt 포함 시)
+
+output:
+  save_per_checkpoint: true
+  save_per_combo: true          # sampling 결과 디버깅을 위해 조합별 저장 권장
+  output_dir: outputs/ensemble_mode3_sampling/

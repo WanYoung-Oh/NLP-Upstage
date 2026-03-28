@@ -1,0 +1,34 @@
+# conf/ensemble_mode1_quick.yaml
+# Mode 1: 체크포인트별 대표 프롬프트 1개씩 → MBR 선택
+# 총 후보 수: 4
+# 예상 소요 시간: ~50분 (RTX 3090, 14B × 4)
+#
+# 목적: 체크포인트 다양성 효과 단독 검증. Mode 2 진입 전 빠른 확인.
+# 대상: lb_confirmed: true 체크포인트 4개만 사용
+
+mode: 1
+description: "Mode 1 빠른 검증: 상위 4 체크포인트 × 대표 프롬프트 1개 = 4 후보"
+
+checkpoints:
+  - name: r4b_response_only      # conf/checkpoints.yaml 참조
+    prompt: qa_style              # 이 체크포인트의 대표 프롬프트
+    weight: 1.2
+  - name: qwen14b_lora_v1
+    prompt: base
+    weight: 1.5
+  - name: exp_B_14b
+    prompt: qa_style
+    weight: 1.0
+  - name: exp_A_14b
+    prompt: base
+    weight: 1.0
+
+mbr:
+  utility: rouge_multi           # rouge-1, rouge-2, rouge-l 평균 (메트릭 편향 감소)
+  use_mecab: true                # 한국어 형태소 분석 (대회 평가 기준과 일치시키기 위해 필수)
+  weighted: true                 # 체크포인트 가중치 적용
+  asymmetric: false              # greedy only → 표준 MBR (H = R)
+
+output:
+  save_per_checkpoint: true      # 체크포인트별 중간 결과 저장 (--resume 지원)
+  output_dir: outputs/ensemble_mode1_quick/

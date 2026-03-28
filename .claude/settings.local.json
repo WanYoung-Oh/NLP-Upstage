@@ -15,7 +15,15 @@
       "Bash(python scripts/qwen_test_mbr_inference.py --model_path LLM/mbr_ensemble/r4b_response_only_ckpt --test_csv data/test.csv --output_csv prediction/qwen_test_mbr_top5.csv)",
       "Bash(python3:*)",
       "Bash(python -c \"import ast; ast.parse\\(open\\(''run_qlora_sweep.py''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:arxiv.org)",
+      "WebSearch",
+      "WebFetch(domain:api.repository.cam.ac.uk)",
+      "WebFetch(domain:www.emergentmind.com)",
+      "WebFetch(domain:aclanthology.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:medium.com)"
     ],
     "deny": [],
     "ask": []

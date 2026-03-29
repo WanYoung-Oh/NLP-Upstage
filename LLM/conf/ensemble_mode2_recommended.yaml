@@ -7,7 +7,7 @@
 # 대상: lb_confirmed: true 체크포인트 3개만 사용
 
 mode: 2
-description: "Mode 2 권장: 상위 3 체크포인트 × 7 프롬프트 = 21 후보"
+description: "Mode 2 권장: 상위 3 체크포인트 × 3 프롬프트 = 9 후보"
 
 checkpoints:
   - name: r4b_response_only      # conf/checkpoints.yaml 참조
@@ -18,13 +18,9 @@ checkpoints:
     weight: 1.0
 
 prompts:
-  - base
-  - qa_style
-  - topic
-  - narrative
-  - observer
-  - gold_mimic
-  - length_constrained
+  - qa_style   # 단일 최고 성능
+  - base       # 가장 안정적
+  - topic      # 주제 활용 다양성
 
 mbr:
   utility: rouge_multi           # rouge-1, rouge-2, rouge-l 평균 (메트릭 편향 감소)

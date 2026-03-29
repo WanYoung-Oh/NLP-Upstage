@@ -14,6 +14,7 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="${LOG_DIR}/ensemble_all_${TIMESTAMP}.log"
 RESUME_FLAG=""
+BATCH_SIZE=1
 
 if [[ "${1:-}" == "--resume" ]]; then
     RESUME_FLAG="--resume"
@@ -44,6 +45,7 @@ run_mode() {
         --config "${config}" \
         --test_file "${TEST_FILE}" \
         --output_file "${output_csv}" \
+        --batch_size "${BATCH_SIZE}" \
         ${RESUME_FLAG} \
         2>&1 | tee -a "${LOG_FILE}"
 

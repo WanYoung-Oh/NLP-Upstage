@@ -50,6 +50,7 @@ DEFAULT_REGISTRY = LLM_DIR / "conf" / "checkpoints.yaml"
 
 MAX_SEQ_LENGTH = 2048
 MAX_NEW_TOKENS = 128
+BATCH_SIZE = 8
 
 
 def _postprocess(text: str) -> str:
@@ -114,8 +115,11 @@ def load_tokenizer_from_adapter(adapter_path: Path) -> Any:
     return tok
 
 
-def load_lora_model(adapter_path: Path, base_model: str) -> Tuple[Any, Any]:
-    """Unsloth 베이스 + LoRA. 토크나이저는 항상 어댑터 폴더(학습 시 저장본)에서만 로드."""
+def load_lora_model(adapter_path: Path, base_model: str) -> Tuple[Any, Any, bool]:
+    """Unsloth 베이스 + LoRA. 토크나이저는 항상 어댑터 폴더(학습 시 저장본)에서만 로드.
+    NOTE: Unsloth Qwen3Attention fast_forward_inference + PEFT LoRA 조합에서
+          use_cache=True 비호환 (shape mismatch 버그) → use_cache=False 고정.
+    """
     from unsloth import FastLanguageModel
 
     adapter_path = adapter_path.resolve()
@@ -126,9 +130,9 @@ def load_lora_model(adapter_path: Path, base_model: str) -> Tuple[Any, Any]:
         device_map={"": 0},
     )
     model = PeftModel.from_pretrained(base, str(adapter_path))
-    tok = load_tokenizer_from_adapter(adapter_path)
     model.eval()
-    return model, tok
+    tok = load_tokenizer_from_adapter(adapter_path)
+    return model, tok, False
 
 
 def _infer_base_from_registry(_adapter_path: Path, reg_entry: Dict[str, Any]) -> str:
@@ -145,40 +149,54 @@ def generate_for_df(
     do_sample: bool,
     temperature: float,
     top_p: float,
+    batch_size: int = BATCH_SIZE,
+    use_cache: bool = False,
 ) -> List[str]:
-    preds: List[str] = []
     device = next(model.parameters()).device
-    for _, row in tqdm(df.iterrows(), total=len(df), desc=f"gen[{prompt_name}]"):
+
+    # 전체 프롬프트 미리 생성
+    texts: List[str] = []
+    for _, row in df.iterrows():
         topic = row["topic"] if "topic" in row and pd.notna(row["topic"]) else ""
         messages = create_messages(prompt_name, str(row["dialogue"]), topic=str(topic))
-        text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
+        texts.append(
+            tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
         )
+
+    gen_kw: Dict[str, Any] = {
+        "max_new_tokens": max_new_tokens,
+        "pad_token_id": tokenizer.eos_token_id,
+        "use_cache": use_cache,
+    }
+    if do_sample:
+        gen_kw["do_sample"] = True
+        gen_kw["temperature"] = temperature
+        gen_kw["top_p"] = top_p
+    else:
+        gen_kw["do_sample"] = False
+
+    preds: List[str] = []
+    n_batches = (len(texts) + batch_size - 1) // batch_size
+    for b in tqdm(range(n_batches), desc=f"gen[{prompt_name}] (bs={batch_size})"):
+        batch_texts = texts[b * batch_size : (b + 1) * batch_size]
         inputs = tokenizer(
-            text,
+            batch_texts,
             return_tensors="pt",
             truncation=True,
             max_length=MAX_SEQ_LENGTH,
+            padding=True,  # padding_side="left" 이므로 좌측 패딩
         ).to(device)
-        gen_kw: Dict[str, Any] = {
-            "max_new_tokens": max_new_tokens,
-            "pad_token_id": tokenizer.eos_token_id,
-            "use_cache": False,  # Unsloth fast_forward_inference + PEFT 조합에서 KV cache shape 충돌
-        }
-        if do_sample:
-            gen_kw["do_sample"] = True
-            gen_kw["temperature"] = temperature
-            gen_kw["top_p"] = top_p
-        else:
-            gen_kw["do_sample"] = False
+        input_len = inputs["input_ids"].shape[1]  # 패딩 후 동일 길이
         with torch.no_grad():
             out = model.generate(**inputs, **gen_kw)
-        gen = out[0][inputs["input_ids"].shape[1] :]
-        raw = tokenizer.decode(gen, skip_special_tokens=True)
-        preds.append(_postprocess(raw))
+        for seq in out:
+            raw = tokenizer.decode(seq[input_len:], skip_special_tokens=True)
+            preds.append(_postprocess(raw))
     return preds
 
 
@@ -333,6 +351,7 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--checkpoint_registry", type=str, default=str(DEFAULT_REGISTRY))
     parser.add_argument("--max_new_tokens", type=int, default=MAX_NEW_TOKENS)
+    parser.add_argument("--batch_size", type=int, default=BATCH_SIZE)
     args = parser.parse_args()
 
     cfg_path = _resolve_path(args.config, LLM_DIR)
@@ -441,7 +460,7 @@ def main() -> None:
 
         print(f"\n{'='*60}\n체크포인트 로드: {name}\n  {adapter_path}\n  base: {base_model}\n{'='*60}")
 
-        model, tokenizer = load_lora_model(adapter_path, base_model)
+        model, tokenizer, uc = load_lora_model(adapter_path, base_model)
 
         if mode == 1:
             prompts_here = [c.get("prompt", "qa_style")]
@@ -459,14 +478,10 @@ def main() -> None:
                         print(f"  [resume] {gkey} 캐시 사용")
                     else:
                         preds = generate_for_df(
-                            model,
-                            tokenizer,
-                            df,
-                            pn,
+                            model, tokenizer, df, pn,
                             args.max_new_tokens,
-                            do_sample=False,
-                            temperature=1.0,
-                            top_p=1.0,
+                            do_sample=False, temperature=1.0, top_p=1.0,
+                            batch_size=args.batch_size, use_cache=uc,
                         )
                         all_predictions[gkey] = preds
                         if save_per_combo:
@@ -482,14 +497,10 @@ def main() -> None:
                         print(f"  [resume] {skey} 캐시 사용")
                     else:
                         spreds = generate_for_df(
-                            model,
-                            tokenizer,
-                            df,
-                            pn,
+                            model, tokenizer, df, pn,
                             args.max_new_tokens,
-                            do_sample=True,
-                            temperature=temperature,
-                            top_p=top_p,
+                            do_sample=True, temperature=temperature, top_p=top_p,
+                            batch_size=args.batch_size, use_cache=uc,
                         )
                         all_predictions[skey] = spreds
                         if save_per_combo:
@@ -503,14 +514,10 @@ def main() -> None:
                     print(f"  [resume] {key} 캐시 사용")
                 else:
                     preds = generate_for_df(
-                        model,
-                        tokenizer,
-                        df,
-                        pn,
+                        model, tokenizer, df, pn,
                         args.max_new_tokens,
-                        do_sample=False,
-                        temperature=1.0,
-                        top_p=1.0,
+                        do_sample=False, temperature=1.0, top_p=1.0,
+                        batch_size=args.batch_size, use_cache=uc,
                     )
                     all_predictions[key] = preds
                     if save_per_combo:

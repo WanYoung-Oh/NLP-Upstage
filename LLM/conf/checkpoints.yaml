@@ -41,16 +41,6 @@ checkpoints:
     lb_confirmed: true
     dev_rouge1: null
 
-  exp_A_14b:
-    path: response_only_SFT/outputs/exp_A_r64_a128_lr2e4/lora_adapter
-    base_model: unsloth/qwen3-14b-unsloth-bnb-4bit
-    size: 14B
-    train_method: response_only_sft
-    lora_rank: 64
-    lora_alpha: 128
-    lr: 2.0e-4
-    lb_confirmed: true
-    dev_rouge1: null
 
   # ============================================================
   # 미확인 체크포인트 — 등록만, 앙상블 파일에서는 제외

@@ -16,8 +16,6 @@ checkpoints:
     weight: 1.5
   - name: exp_B_14b
     weight: 1.0
-  - name: exp_A_14b
-    weight: 1.0
 
 prompts:
   - base

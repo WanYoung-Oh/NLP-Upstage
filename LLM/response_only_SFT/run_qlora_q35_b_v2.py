@@ -27,6 +27,7 @@ import pandas as pd
 import numpy as np
 import torch
 from datasets import Dataset
+from transformers import AutoTokenizer
 from tqdm.auto import tqdm
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -377,14 +378,16 @@ def run_experiment(exp: Dict) -> Dict:
     base_model_name = adapter_cfg["base_model_name_or_path"]
     print(f"  base model: {base_model_name}")
 
-    base_model_inf, tokenizer_inf = FastModel.from_pretrained(
+    base_model_inf, _ = FastModel.from_pretrained(
         model_name=base_model_name,
         max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
         dtype=torch.bfloat16,
     )
-    if hasattr(tokenizer_inf, "tokenizer"):
-        tokenizer_inf = tokenizer_inf.tokenizer
+    tokenizer_inf = AutoTokenizer.from_pretrained(lora_path, trust_remote_code=True)
+    tokenizer_inf.padding_side = "left"
+    if tokenizer_inf.pad_token is None:
+        tokenizer_inf.pad_token = tokenizer_inf.eos_token
     model_inf = PeftModel.from_pretrained(base_model_inf, lora_path)
     model_inf.eval()
 

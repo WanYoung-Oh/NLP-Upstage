@@ -19,9 +19,6 @@ checkpoints:
   - name: exp_B_14b
     prompt: qa_style
     weight: 1.0
-  - name: exp_A_14b
-    prompt: base
-    weight: 1.0
 
 mbr:
   utility: rouge_multi           # rouge-1, rouge-2, rouge-l 평균 (메트릭 편향 감소)

@@ -7,10 +7,17 @@
 import argparse
 import json
 from pathlib import Path
+
+import unsloth  # noqa: F401 — transformers/peft보다 먼저 로드해야 패치·경고가 사라짐
+from unsloth import FastModel
+
 import pandas as pd
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
+
+# Unsloth QLoRA 학습(run_qlora_*_v2)과 동일한 베이스 래핑 → LoRA 키가 PEFT와 일치함
+ADAPTER_MAX_SEQ_LENGTH = 2048
 
 from prompts.inference import InferencePipeline, quick_inference
 from prompts.evaluation import (
@@ -78,14 +85,13 @@ def _resolve_output_path(path_str: str) -> Path:
 def _load_model_and_tokenizer(model_path: str):
     """
     모델 경로가 full model인지 LoRA adapter인지 자동 판별하여 로드합니다.
-    adapter인 경우 4-bit NF4 양자화로 베이스 모델을 로드합니다.
+
+    adapter인 경우: Unsloth FastModel + 4bit로 베이스를 올린 뒤 PeftModel을 얹습니다.
+    토크나이저는 학습 시 save_pretrained된 것과 동일하게 AutoTokenizer(어댑터 폴더)에서 로드합니다.
+    (AutoModelForCausalLM + bitsandbytes만 쓰면 Qwen3.5+Unsloth로 저장한 LoRA 키가
+    맞지 않아 missing adapter keys 경고가 나고 학습 가중치가 반영되지 않을 수 있음.)
     """
     resolved_model_path = _resolve_input_path(model_path)
-
-    tokenizer = AutoTokenizer.from_pretrained(str(resolved_model_path))
-    tokenizer.padding_side = "left"
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     adapter_config_path = resolved_model_path / "adapter_config.json"
     if adapter_config_path.exists():
@@ -99,29 +105,38 @@ def _load_model_and_tokenizer(model_path: str):
             )
 
         print(f"어댑터 체크포인트 감지: {resolved_model_path}")
-        print(f"베이스 모델 로드 (4-bit NF4): {base_model_name}")
+        print(f"베이스 모델 로드 (Unsloth FastModel, 4-bit): {base_model_name}")
+        print(f"토크나이저: 학습 시 저장본 (AutoTokenizer ← 어댑터 폴더)")
 
-        bnb_config = BitsAndBytesConfig(
+        base_model, _ = FastModel.from_pretrained(
+            model_name=base_model_name,
+            max_seq_length=ADAPTER_MAX_SEQ_LENGTH,
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
+            dtype=torch.bfloat16,
         )
-        base_model = AutoModelForCausalLM.from_pretrained(
-            base_model_name,
-            quantization_config=bnb_config,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-        )
-        model = PeftModel.from_pretrained(base_model, str(resolved_model_path))
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
+        tokenizer = AutoTokenizer.from_pretrained(
             str(resolved_model_path),
-            device_map=_causal_lm_device_map(),
-            torch_dtype="auto",
             trust_remote_code=True,
         )
+
+        tokenizer.padding_side = "left"
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = PeftModel.from_pretrained(base_model, str(resolved_model_path))
+        return model, tokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(str(resolved_model_path))
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        str(resolved_model_path),
+        device_map=_causal_lm_device_map(),
+        torch_dtype="auto",
+        trust_remote_code=True,
+    )
 
     return model, tokenizer
 

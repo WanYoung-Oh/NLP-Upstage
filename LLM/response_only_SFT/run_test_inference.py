@@ -1,8 +1,8 @@
 """
 Test 추론 스크립트 — A/B 비교 후 최고 체크포인트로 test.csv 추론
 
-핵심: 모델 추론은 inference_worker.py를 별도 subprocess로 실행.
-      → 현재 프로세스에 Unsloth가 임포트돼 있어도 worker는 완전히 격리됨.
+핵심: 모델 추론은 inference_worker.py를 별도 subprocess로 실행 (메모리·프로세스 격리).
+      worker는 Unsloth FastModel(4-bit) + PeftModel로 LoRA 로드 (run_prompts.py와 동일).
 
 사용법:
     cd /data/ephemeral/home/NLP/LLM/response_only_SFT

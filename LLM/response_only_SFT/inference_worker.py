@@ -1,46 +1,36 @@
 """
-Unsloth 없는 독립 추론 워커 — subprocess로 호출됩니다.
-AutoModelForCausalLM + BitsAndBytesConfig + PeftModel 사용.
+subprocess 추론 워커 — run_test_inference.py가 호출합니다.
+
+Unsloth FastModel(4-bit) + PeftModel로 LoRA를 로드합니다.
+(run_prompts.py, run_qlora_q35_b_v2.py와 동일 — AutoModel+CausalLM만 쓰면
+Unsloth로 저장한 Qwen3.5 LoRA 키가 맞지 않아 missing adapter keys가 날 수 있음)
 
 사용법 (직접 호출 금지, run_test_inference.py가 subprocess로 실행):
-    python inference_worker.py \
-        --lora_path <path> \
-        --input_csv <path> \
-        --output_csv <path> \
-        --mode dev|test \
+    python inference_worker.py \\
+        --lora_path <path> \\
+        --input_csv <path> \\
+        --output_csv <path> \\
+        --mode dev|test \\
         --batch_size 4
 """
-# ── Unsloth 임포트 완전 차단 ──────────────────────────────────────────────────
-import sys
-_BLOCKED = {"unsloth", "unsloth_zoo"}
-_real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
-
-import builtins
-_orig_import = builtins.__import__
-
-def _blocking_import(name, *args, **kwargs):
-    top = name.split(".")[0]
-    if top in _BLOCKED:
-        raise ImportError(f"[inference_worker] Unsloth import blocked: {name}")
-    return _orig_import(name, *args, **kwargs)
-
-builtins.__import__ = _blocking_import
-# ─────────────────────────────────────────────────────────────────────────────
-
 import os
 import gc
 import re
 import json
 import argparse
 
+import unsloth  # noqa: F401 — transformers/peft보다 먼저 로드해야 패치·경고 완화
+from unsloth import FastModel
+
 import torch
 import pandas as pd
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoTokenizer
 from peft import PeftModel
 
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+# FastModel max_seq_length — run_prompts ADAPTER_MAX_SEQ_LENGTH / run_qlora와 동일
 MAX_SEQ_LENGTH = 2048
 MAX_NEW_TOKENS = 192
 
@@ -71,29 +61,29 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4)
     args = parser.parse_args()
 
-    adapter_cfg    = json.load(open(os.path.join(args.lora_path, "adapter_config.json")))
+    adapter_cfg     = json.load(open(os.path.join(args.lora_path, "adapter_config.json")))
     base_model_name = adapter_cfg["base_model_name_or_path"]
     print(f"[worker] base model : {base_model_name}")
     print(f"[worker] adapter    : {args.lora_path}")
     print(f"[worker] mode={args.mode}  batch_size={args.batch_size}")
+    print(f"[worker] 로드 방식  : Unsloth FastModel(4-bit) + PeftModel")
+    print(f"[worker] tokenizer  : 학습 시 저장본 (AutoTokenizer ← lora_path)")
 
-    bnb_config = BitsAndBytesConfig(
+    base_model, _ = FastModel.from_pretrained(
+        model_name=base_model_name,
+        max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
+        dtype=torch.bfloat16,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.lora_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.lora_path,
+        trust_remote_code=True,
+    )
+
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
     model = PeftModel.from_pretrained(base_model, args.lora_path)
     model.eval()
 

@@ -23,8 +23,6 @@ checkpoints:
     weight: 1.5
   - name: exp_B_14b
     weight: 1.0
-  - name: exp_A_14b
-    weight: 1.0
 
 # sampling 포함 시 프롬프트 수를 줄여 총 시간 조절
 # 핵심 상위 3개 프롬프트 사용 (다양성 확보에 충분)

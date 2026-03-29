@@ -16,18 +16,21 @@ SimPO preference learning → qa_style 추론.
     Step 3. SimPO 모델 + qa_style 프롬프트로 dev/test 추론
 
 출력:
-    outputs/simpo_r4b/lora_adapter/     — SimPO LoRA 어댑터
-    outputs/simpo_r4b/_merged_sft/      — Merged SFT (Step 2 베이스)
-    prediction/simpo_r4b_dev.csv        — dev 평가용
-    prediction/simpo_r4b_test.csv       — 제출용
+    outputs/simpo_v2_ckpt/              — SimPO LoRA 어댑터 + 학습 시 저장한 토크나이저
+    outputs/simpo_r4b/_merged_sft/      — Merged SFT (Step 1)
+    outputs/simpo_r4b/                  — CPOTrainer 체크포인트 (Step 2, 선택)
+    prediction/simpo_v2_ckpt_test.csv   — 제출용
 """
 
 import os, sys, gc, re, json, argparse
 from pathlib import Path
 
+import unsloth  # noqa: F401 — transformers보다 먼저 (Unsloth 패치·경고)
 import torch
 import pandas as pd
 from tqdm.auto import tqdm
+from transformers import AutoTokenizer
+from peft import PeftModel
 
 # ── 경로 ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -42,9 +45,11 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 # ── 하이퍼파라미터 ────────────────────────────────────────────────────────────
 BASE_MODEL     = "unsloth/qwen3-14b-unsloth-bnb-4bit"
 SFT_ADAPTER    = str(LLM_DIR / "mbr_ensemble" / "r4b_response_only_ckpt")
+# Step 2 CPOTrainer 로그·체크포인트 (adapter 가중치는 ADAPTER_PATH에 별도 저장)
 SIMPO_OUTPUT   = str(SCRIPT_DIR / "outputs" / "simpo_r4b")
 MERGED_PATH    = os.path.join(SIMPO_OUTPUT, "_merged_sft")
-ADAPTER_PATH   = os.path.join(SIMPO_OUTPUT, "lora_adapter")
+# SimPO LoRA + tokenizer.save_pretrained 대상 (추론·infer_only 기본값)
+ADAPTER_PATH   = str(SCRIPT_DIR / "outputs" / "simpo_v2_ckpt")
 DATA_FILE      = str(SCRIPT_DIR / "data" / "train_with_rejects.json")
 DATA_DIR       = str(SCRIPT_DIR / "data")
 PRED_DIR       = str(ROOT_DIR / "prediction")
@@ -247,17 +252,48 @@ def step2_simpo():
 
 # ── 공통 추론 함수 ────────────────────────────────────────────────────────────
 
-def _load_model_for_infer(base_path: str, adapter_path: str):
-    """adapter_path(LoRA) 기준으로 Unsloth FastLanguageModel 로드.
-    AutoModelForCausalLM 대신 FastLanguageModel 사용 → apply_qkv 패치 보장."""
+def _infer_base_model_name(adapter_path: str) -> str:
+    """
+    adapter_config.json의 base_model_name_or_path가
+    다른 머신 절대경로로만 저장된 경우 Hugging Face가 로드에 실패한다.
+    로컬에 디렉터리가 없으면 MERGED_PATH(Step1 merge) 또는 BASE_MODEL을 쓴다.
+    """
+    cfg_path = os.path.join(adapter_path, "adapter_config.json")
+    if not os.path.isfile(cfg_path):
+        return BASE_MODEL
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    raw = cfg.get("base_model_name_or_path") or BASE_MODEL
+    if not isinstance(raw, str):
+        return BASE_MODEL
+    merged_cfg = os.path.join(MERGED_PATH, "config.json")
+    if os.path.isdir(raw) and os.path.isfile(os.path.join(raw, "config.json")):
+        return raw
+    if raw.startswith("/") and not os.path.exists(raw):
+        if os.path.isfile(merged_cfg):
+            return MERGED_PATH
+        return BASE_MODEL
+    return raw
+
+
+def _load_model_for_infer(adapter_path: str):
+    """베이스는 _infer_base_model_name()로 결정 후 FastLanguageModel 로드,
+    LoRA는 PeftModel.from_pretrained(adapter_path).
+    토크나이저는 adapter 폴더의 학습 시 저장본(AutoTokenizer)."""
     from unsloth import FastLanguageModel
 
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=adapter_path,   # adapter_config.json이 base 경로를 자동 참조
+    base_name = _infer_base_model_name(adapter_path)
+    print(f"  [infer] 베이스 모델 경로: {base_name}")
+
+    base_model, _ = FastLanguageModel.from_pretrained(
+        model_name=base_name,
         max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
         device_map={"": 0},
     )
+    model = PeftModel.from_pretrained(base_model, adapter_path)
+
+    tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=True)
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -337,7 +373,7 @@ def step0_eval_baseline():
     print(f"  adapter: {baseline_adapter}")
     print(f"{'='*60}")
 
-    model, tokenizer = _load_model_for_infer(BASE_MODEL, baseline_adapter)
+    model, tokenizer = _load_model_for_infer(baseline_adapter)
     _run_infer(model, tokenizer, label="baseline", pred_prefix="simpo_baseline_qa")
 
     del model
@@ -349,15 +385,15 @@ def step0_eval_baseline():
 # ── Step 3: 추론 ──────────────────────────────────────────────────────────────
 
 def step3_infer():
-    """SimPO r4b adapter + qa_style 프롬프트로 dev/test 추론."""
+    """SimPO simpo_v2_ckpt adapter + qa_style 프롬프트로 test 추론."""
     print(f"\n{'='*60}")
-    print("[Step 3] SimPO r4b + qa_style 추론")
+    print("[Step 3] SimPO (simpo_v2_ckpt) + qa_style 추론")
     print(f"  base   : {BASE_MODEL}")
     print(f"  adapter: {ADAPTER_PATH}")
     print(f"{'='*60}")
 
-    model, tokenizer = _load_model_for_infer(BASE_MODEL, ADAPTER_PATH)
-    _run_infer(model, tokenizer, label="simpo_r4b", pred_prefix="simpo_r4b")
+    model, tokenizer = _load_model_for_infer(ADAPTER_PATH)
+    _run_infer(model, tokenizer, label="simpo_v2_ckpt", pred_prefix="simpo_v2_ckpt")
 
     del model
     gc.collect()

@@ -1,14 +1,14 @@
 # conf/ensemble_mode2_full.yaml
 # Mode 2 고품질: 체크포인트 × 프롬프트 + BERTScore utility
-# 총 후보 수: 4 ckpt × 7 prompts = 28
-# 예상 소요 시간: ~4h (RTX 3090, 14B × 4 + BERTScore 계산)
+# 총 후보 수: 3 ckpt × 7 prompts = 21
+# 예상 소요 시간: ~3h (RTX 3090, 14B × 3 + BERTScore 계산)
 #
 # mode2_recommended 대비 차이: utility를 BERTScore+ROUGE 복합으로 변경
 # BERTScore는 한국어 의미 유사도를 더 잘 포착하나 klue/roberta-base 모델 필요
 # 리더보드가 ROUGE 기반이라면 mode2_recommended가 더 직접적으로 최적화됨
 
 mode: 2
-description: "Mode 2 고품질: 상위 4 체크포인트 × 7 프롬프트 + BERTScore+ROUGE utility"
+description: "Mode 2 고품질: 상위 3 체크포인트 × 7 프롬프트 + BERTScore+ROUGE utility"
 
 checkpoints:
   - name: r4b_response_only
@@ -17,7 +17,6 @@ checkpoints:
     weight: 1.5
   - name: exp_B_14b
     weight: 1.0
-
 
 prompts:
   - base
@@ -38,6 +37,5 @@ mbr:
   asymmetric: false
 
 output:
-  save_per_checkpoint: true
   save_per_combo: false
   output_dir: outputs/ensemble_mode2_full/

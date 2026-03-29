@@ -39,14 +39,13 @@
 
 ### 1.2 리더보드 확인된 상위 체크포인트
 
-리더보드 제출 결과로 확인된 상위 4개 체크포인트. **이 4개만 앙상블에 사용한다.**
+리더보드 제출 결과로 확인된 상위 3개 체크포인트. **이 3개만 앙상블에 사용한다.**
 
 | 이름 | 경로 | 훈련 방식 | LB 확인 | 비고 |
 |---|---|---|---|---|
 | `r4b_response_only` | `response_only_SFT/r4b_response_only_ckpt/` | Response-only SFT | ✅ | 현재 메인, MBR 시 0.5716 |
 | `qwen14b_lora_v1` | `response_only_SFT/outputs/qwen3_14b_lora_sft/lora_adapter/` | Response-only SFT | ✅ | — |
 | `exp_B_14b` | `response_only_SFT/outputs/exp_B_r32_a64_lr1e4/lora_adapter/` | SFT (r32, α64, lr1e-4) | ✅ | — |
-| `exp_A_14b` | `response_only_SFT/outputs/exp_A_r64_a128_lr2e4/lora_adapter/` | SFT (r64, α128, lr2e-4) | ✅ | — |
 
 > 이하 미확인 체크포인트(simpo_v2, baseline_14b, q35 계열)는 conf/checkpoints.yaml에 등록은 유지하되
 > 앙상블 설정 파일에서는 제외한다. 품질이 불확실한 체크포인트를 포함하면
@@ -149,10 +148,10 @@ python -c "import MeCab; m = MeCab.Tagger(); print('MeCab OK')"
 이 세 축은 서로 **직교**하므로, 결합 시 가산적 효과가 기대된다.
 
 ```
-Mode 1: 4 ckpt × 1 prompt (greedy)              = 4 후보
-Mode 2: 4 ckpt × 7 prompts (greedy)             = 28 후보
-Mode 3: 4 ckpt × 1 prompt × K samples           = 4K 후보
-최대:   4 ckpt × 7 prompts × K samples          = 28K 후보
+Mode 1: 3 ckpt × 1 prompt (greedy)              = 3 후보
+Mode 2: 3 ckpt × 7 prompts (greedy)             = 21 후보
+Mode 3: 3 ckpt × 1 prompt × K samples           = 3K 후보
+최대:   3 ckpt × 7 prompts × K samples          = 21K 후보
 ```
 
 ---
@@ -161,14 +160,13 @@ Mode 3: 4 ckpt × 1 prompt × K samples           = 4K 후보
 
 ### 3.1 개요
 
-상위 4개 체크포인트에서 대표 프롬프트 1개씩 생성, 4 후보로 MBR 선택.
+상위 3개 체크포인트에서 대표 프롬프트 1개씩 생성, 3 후보로 MBR 선택.
 가장 빠른 검증용. 체크포인트 다양성 효과만 단독으로 측정할 수 있다.
 
 ```
 r4b_response_only  × qa_style  →  요약_A
-qwen14b_lora_v1    × base      →  요약_B  →  MBR (4 후보)  →  최종 요약
+qwen14b_lora_v1    × base      →  요약_B  →  MBR (3 후보)  →  최종 요약
 exp_B_14b          × qa_style  →  요약_C
-exp_A_14b          × base      →  요약_D
 ```
 
 ### 3.2 실행 흐름
@@ -184,8 +182,8 @@ final = apply_mbr(predictions, utility=config.mbr.utility)
 
 ### 3.3 특징
 
-- 후보 수: **4개** (최소 구성)
-- 소요 시간: **~50분** (14B × 4 체크포인트)
+- 후보 수: **3개** (최소 구성)
+- 소요 시간: **~38분** (14B × 3 체크포인트)
 - 용도: 체크포인트 다양성 효과 단독 검증, Mode 2 진입 전 빠른 확인
 
 ---
@@ -194,16 +192,15 @@ final = apply_mbr(predictions, utility=config.mbr.utility)
 
 ### 4.1 개요
 
-상위 4개 체크포인트 × 7개 프롬프트의 전체 조합으로 28 후보 풀 구성 후 MBR 선택.
+상위 3개 체크포인트 × 7개 프롬프트의 전체 조합으로 21 후보 풀 구성 후 MBR 선택.
 체크포인트 다양성 + 프롬프트 다양성을 동시에 활용하는 **핵심 전략**.
 
 ```
 r4b_response_only × [base, qa_style, topic, narrative, observer, gold_mimic, length_constrained]
 qwen14b_lora_v1   × [base, qa_style, topic, narrative, observer, gold_mimic, length_constrained]
 exp_B_14b         × [base, qa_style, topic, narrative, observer, gold_mimic, length_constrained]
-exp_A_14b         × [base, qa_style, topic, narrative, observer, gold_mimic, length_constrained]
                                                                         ↓
-                                                              총 28 후보 → MBR
+                                                              총 21 후보 → MBR
 ```
 
 ### 4.2 실행 흐름
@@ -225,9 +222,9 @@ final = apply_mbr(all_predictions, utility=config.mbr.utility)
 
 | 구성 | 후보 수 | 예상 시간 | 비고 |
 |---|---|---|---|
-| 4 ckpt × 3 prompts | 12 | ~1.5h | 빠른 검증 |
-| 4 ckpt × 7 prompts | **28** | **~3.5h** | **권장** |
-| 4 ckpt × 7 prompts + sampling | 28~56+ | ~5h+ | Mode 2 + 3 결합 |
+| 3 ckpt × 3 prompts | 9 | ~1.1h | 빠른 검증 |
+| 3 ckpt × 7 prompts | **21** | **~2.6h** | **권장** |
+| 3 ckpt × 7 prompts + sampling | 21~40+ | ~4h+ | Mode 2 + 3 결합 |
 
 ### 4.4 체크포인트 가중치 적용
 
@@ -241,8 +238,6 @@ checkpoints:
   - name: qwen14b_lora_v1
     weight: 1.5           # 상위 성능 시 높은 가중치
   - name: exp_B_14b
-    weight: 1.0
-  - name: exp_A_14b
     weight: 1.0
 ```
 
@@ -284,9 +279,9 @@ sampling:
 
 | 구성 | 후보 수 | 예상 시간 | 비고 |
 |---|---|---|---|
-| 4 ckpt × 1 prompt × 3 samples | 12 | ~1.5h | Mode 3 단독 최소 |
-| 4 ckpt × 3 prompts × 3 samples | 36 | ~4h | Mode 2+3 결합 |
-| 4 ckpt × 7 prompts × 3 samples | **84** | **~10h** | 최대 구성 |
+| 3 ckpt × 1 prompt × 3 samples | 9 | ~1.1h | Mode 3 단독 최소 |
+| 3 ckpt × 3 prompts × 3 samples | 27 | ~3h | Mode 2+3 결합 |
+| 3 ckpt × 7 prompts × 3 samples | **63** | **~7.5h** | 최대 구성 |
 
 ### 5.4 비대칭 MBR과의 결합 (권장)
 
@@ -323,11 +318,11 @@ $$y^* = \arg\max_{y \in \mathcal{H}} \sum_{r \in \mathcal{R}} U(y, r)$$
 - $\mathcal{R}$ (reference pool): 품질 기준을 위해 좁게 구성 — greedy 출력만, 또는 상위 체크포인트 greedy만
 
 ```
-H = {greedy_A, greedy_B, greedy_C, greedy_D,     # 4 ckpt greedy
+H = {greedy_A, greedy_B, greedy_C,               # 3 ckpt greedy
      sample_A1, sample_A2, sample_A3,             # ckpt_A sampling
      sample_B1, sample_B2, sample_B3, ...}        # 모든 샘플 포함
 
-R = {greedy_A, greedy_B, greedy_C, greedy_D}     # greedy만 (신뢰 가능한 기준)
+R = {greedy_A, greedy_B, greedy_C}               # greedy만 (신뢰 가능한 기준)
 
 y* = argmax_{y in H} Σ_{r in R} U(y, r)
 ```
@@ -353,7 +348,7 @@ mbr:
 |---|---|---|---|
 | Mode 1/2 (greedy only) | 모든 greedy | 모든 greedy 동일 | 표준 MBR (H=R) |
 | Mode 3 sampling 포함 | greedy + sampled | greedy만 | **비대칭 MBR 권장** |
-| 미확인 체크포인트 포함 시 | 전체 | 상위 4 ckpt greedy만 | **비대칭 MBR 필수** |
+| 미확인 체크포인트 포함 시 | 전체 | 상위 3 ckpt greedy만 | **비대칭 MBR 필수** |
 
 ---
 
@@ -364,10 +359,10 @@ mbr:
 ```
 LLM/conf/
 ├── checkpoints.yaml                # 체크포인트 레지스트리
-├── ensemble_mode1_quick.yaml       # Mode 1: 4 ckpt × 1 prompt = 4 후보 (~50min)
-├── ensemble_mode2_recommended.yaml # Mode 2: 4 ckpt × 7 prompts = 28 후보 (~3.5h)
-├── ensemble_mode2_full.yaml        # Mode 2 + 비대칭 MBR + BERTScore (~4h)
-└── ensemble_mode3_sampling.yaml    # Mode 3: sampling 포함 비대칭 MBR (~5h)
+├── ensemble_mode1_quick.yaml       # Mode 1: 3 ckpt × 1 prompt = 3 후보 (~38min)
+├── ensemble_mode2_recommended.yaml # Mode 2: 3 ckpt × 7 prompts = 21 후보 (~2.6h)
+├── ensemble_mode2_full.yaml        # Mode 2 + 비대칭 MBR + BERTScore (~3h)
+└── ensemble_mode3_sampling.yaml    # Mode 3: sampling 포함 비대칭 MBR (~4h)
 ```
 
 ### 7.2 체크포인트 레지스트리 (`conf/checkpoints.yaml`)
@@ -383,10 +378,10 @@ LLM/conf/
 
 | 파일 | Mode | 후보 수 | 예상 시간 | MBR 방식 | 용도 |
 |---|---|---|---|---|---|
-| mode1_quick | 1 | 4 | ~50min | 표준, ROUGE-multi | 빠른 효과 검증 |
-| mode2_recommended | 2 | 28 | ~3.5h | 표준, ROUGE-multi | 핵심 제출용 |
-| mode2_full | 2 | 28 | ~4h | 표준, BERTScore+ROUGE | 최고 품질 제출용 |
-| mode3_sampling | 3 | 40 | ~5h | **비대칭**, ROUGE-multi | Sampling 다양성 실험 |
+| mode1_quick | 1 | 3 | ~38min | 표준, ROUGE-multi | 빠른 효과 검증 |
+| mode2_recommended | 2 | 21 | ~2.6h | 표준, ROUGE-multi | 핵심 제출용 |
+| mode2_full | 2 | 21 | ~3h | 표준, BERTScore+ROUGE | 최고 품질 제출용 |
+| mode3_sampling | 3 | 30 | ~4h | **비대칭**, ROUGE-multi | Sampling 다양성 실험 |
 
 ---
 
@@ -440,7 +435,7 @@ Sampling 설정 (Mode 3):
 
 ### 8.3 사용 예시
 
-**[예시 1] Mode 1 빠른 검증 (~50분)**
+**[예시 1] Mode 1 빠른 검증 (~38분)**
 ```bash
 python run_ensemble.py \
     --config conf/ensemble_mode1_quick.yaml \
@@ -448,7 +443,7 @@ python run_ensemble.py \
     --output_file outputs/submission_mode1.csv
 ```
 
-**[예시 2] Mode 2 권장 제출용 (~3.5시간)**
+**[예시 2] Mode 2 권장 제출용 (~2.6시간)**
 ```bash
 python run_ensemble.py \
     --config conf/ensemble_mode2_recommended.yaml \
@@ -457,7 +452,7 @@ python run_ensemble.py \
     --save_all
 ```
 
-**[예시 3] Mode 3 Sampling + 비대칭 MBR (~5시간)**
+**[예시 3] Mode 3 Sampling + 비대칭 MBR (~4시간)**
 ```bash
 python run_ensemble.py \
     --config conf/ensemble_mode3_sampling.yaml \
@@ -517,12 +512,12 @@ python run_ensemble.py \
 |---|---|---|---|
 | 현재 (단일 ckpt, 7 prompts) | 기준 | 52.0 | 측정값 |
 | ROUGE Multi (1+2+L) 전환 | +0.2~0.5 | ~52.5 | 메트릭 편향 감소 |
-| **Mode 1** (4 ckpt × 1 prompt) | +0.5~1.5 | ~53.5 | 체크포인트 다양성 |
-| **Mode 2** (4 ckpt × 7 prompts) | +1.0~2.5 | ~54.5 | 두 다양성 축 결합 |
+| **Mode 1** (3 ckpt × 1 prompt) | +0.5~1.5 | ~53.5 | 체크포인트 다양성 |
+| **Mode 2** (3 ckpt × 7 prompts) | +1.0~2.5 | ~54.5 | 두 다양성 축 결합 |
 | **Mode 3** (sampling + 비대칭) | +0.5~1.5 추가 | ~55.0 | 확률적 탐색 추가 |
 | Mode 2 + BERTScore utility | +0.5~1.5 추가 | ~56.0 | 신경망 메트릭 |
 
-> **현실적 기대:** Mode 2 (4 ckpt × 7 prompts, ROUGE Multi) 시 **+1~2.5점** 향상이 가장 현실적.
+> **현실적 기대:** Mode 2 (3 ckpt × 7 prompts, ROUGE Multi) 시 **+1~2.5점** 향상이 가장 현실적.
 > 총 목표: 52.0 → **54~55** 범위 진입.
 
 ### 9.3 수확 체감 구간
@@ -533,7 +528,7 @@ python run_ensemble.py \
                                    ↑ 권장    ↑ 수확 체감 진입
 ```
 
-EMNLP 2024 논문 기준, 실용적 최적 구간은 **21~35 후보**. Mode 2 (28 후보)가 최적점.
+EMNLP 2024 논문 기준, 실용적 최적 구간은 **21~35 후보**. Mode 2 (21 후보)가 해당 범위 하단에 있다.
 
 ### 9.4 비대칭 MBR의 추가 가치
 
@@ -559,7 +554,7 @@ EMNLP 2024 논문 기준, 실용적 최적 구간은 **21~35 후보**. Mode 2 (2
 ### Phase 1: 기반 구조
 
 ```
-□ conf/checkpoints.yaml         체크포인트 레지스트리 (4개 확인된 상위 ckpt 마킹)
+□ conf/checkpoints.yaml         체크포인트 레지스트리 (3개 확인된 상위 ckpt 마킹)
 □ conf/ensemble_mode*.yaml      설정 파일 4종
 □ run_ensemble.py               메인 CLI 스크립트
   - YAML 파싱 + checkpoints.yaml 참조 해석
@@ -571,7 +566,7 @@ EMNLP 2024 논문 기준, 실용적 최적 구간은 **21~35 후보**. Mode 2 (2
 ### Phase 2: Mode 1 검증 (~1일)
 
 ```
-□ 4 체크포인트 × 1 대표 프롬프트 실행
+□ 3 체크포인트 × 1 대표 프롬프트 실행
 □ Dev set ROUGE 측정 및 체크포인트 기여도 분석
 □ MBR 선택 빈도 통계 확인
 □ 가중치 조정 실험
@@ -580,7 +575,7 @@ EMNLP 2024 논문 기준, 실용적 최적 구간은 **21~35 후보**. Mode 2 (2
 ### Phase 3: Mode 2 풀 실행 (~1일)
 
 ```
-□ 4 체크포인트 × 7 프롬프트 실행 (28 후보)
+□ 3 체크포인트 × 7 프롬프트 실행 (21 후보)
 □ ROUGE Multi utility 적용
 □ Dev vs LB 점수 비교 (오버피팅 여부 확인)
 □ 제출

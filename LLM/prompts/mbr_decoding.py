@@ -161,6 +161,40 @@ def apply_mbr_to_dataset(test_df, all_predictions, use_mecab=True, metric="rouge
     return mbr_preds
 
 
+def apply_mbr_to_dataset_multi(test_df, all_predictions, use_mecab=True, verbose=True, weights=None):
+    """ROUGE-1/2/L 평균(mbr_multi_metric)으로 샘플별 최적 후보 선택."""
+    model_names = list(all_predictions.keys())
+    n_samples = len(test_df) if hasattr(test_df, "__len__") else test_df
+
+    mbr_preds = []
+    model_selected = {name: 0 for name in model_names}
+
+    iterator = range(n_samples)
+    if verbose:
+        iterator = tqdm(iterator, desc="MBR Ensemble (ROUGE multi)")
+
+    for i in iterator:
+        candidates = [(name, all_predictions[name][i]) for name in model_names]
+        selected = mbr_multi_metric(candidates, use_mecab=use_mecab, weights=weights)
+        mbr_preds.append(selected)
+        for name, text in candidates:
+            if text == selected:
+                model_selected[name] += 1
+                break
+
+    if verbose:
+        print("\n" + "=" * 80)
+        print("MBR 앙상블 결과 - 모델 선택 빈도 (ROUGE multi)")
+        print("=" * 80)
+        for name, count in sorted(model_selected.items(), key=lambda x: -x[1]):
+            percentage = 100 * count / n_samples
+            bar = "█" * int(percentage / 2)
+            print(f"  {name:40s}: {count:4d} ({percentage:5.1f}%) {bar}")
+        print("=" * 80)
+
+    return mbr_preds
+
+
 def mbr_with_weights(candidates, weights=None, use_mecab=True, metric="rouge-1"):
     """
     가중치를 적용한 MBR 디코딩
@@ -229,11 +263,7 @@ def mbr_with_weights(candidates, weights=None, use_mecab=True, metric="rouge-1")
         
         if total_weight > 0:
             weighted_rouge /= total_weight
-        
-        # 자기 자신에 대한 가중치도 고려
-        self_weight = weights.get(candidates[j][0], 1.0)
-        weighted_rouge *= self_weight
-        
+
         if weighted_rouge > best_score:
             best_score = weighted_rouge
             best_idx = j
@@ -241,7 +271,7 @@ def mbr_with_weights(candidates, weights=None, use_mecab=True, metric="rouge-1")
     return candidates[best_idx][1]
 
 
-def mbr_multi_metric(candidates, use_mecab=True, metrics=None):
+def mbr_multi_metric(candidates, use_mecab=True, metrics=None, weights=None):
     """
     여러 ROUGE 메트릭을 종합한 MBR 디코딩
     
@@ -288,22 +318,23 @@ def mbr_multi_metric(candidates, use_mecab=True, metrics=None):
     n = len(candidates)
     
     for j in range(n):
-        total_rouge = 0
-        count = 0
-        
+        total_rouge = 0.0
+        total_weight = 0.0
+
         for k in range(n):
             if j != k:
                 try:
                     scores = rouge.get_scores([cand_morphs[j]], [cand_morphs[k]])[0]
                     # 모든 메트릭의 평균
                     metric_avg = sum(scores[m]["f"] for m in metrics) / len(metrics)
-                    total_rouge += metric_avg
-                    count += 1
+                    ref_w = float(weights.get(candidates[k][0], 1.0)) if weights else 1.0
+                    total_rouge += metric_avg * ref_w
+                    total_weight += ref_w
                 except:
                     pass
-        
-        if count > 0:
-            avg_rouge = total_rouge / count
+
+        if total_weight > 0:
+            avg_rouge = total_rouge / total_weight
         else:
             avg_rouge = 0
         
@@ -312,6 +343,149 @@ def mbr_multi_metric(candidates, use_mecab=True, metrics=None):
             best_idx = j
     
     return candidates[best_idx][1]
+
+
+def mbr_ensemble_asymmetric(
+    candidates,
+    reference_keys,
+    use_mecab=True,
+    metric="rouge-1",
+    multi_metrics=None,
+    weights=None,
+):
+    """
+    비대칭 MBR: hypothesis 풀 H 전체에서 고르고, utility는 reference 풀 R에 대해서만 평균.
+
+    y* = argmax_{y in H} (1/|R|) * sum_{r in R} w_r * U(y, r)
+
+    Args:
+        candidates: [(key, text), ...] — 전체 후보 (H)
+        reference_keys: R에 포함할 candidate key 집합. None이면 표준 MBR(H=R).
+        use_mecab: MeCab 형태소 분석
+        metric: reference_keys가 None일 때 표준 mbr_ensemble에 전달
+        multi_metrics: None이 아니면 ROUGE multi (rouge-1/2/l 평균)로 U 계산
+        weights: {key: float} — 후보 key별 가중치 (없으면 1.0)
+    """
+    if not reference_keys:
+        if multi_metrics:
+            return mbr_multi_metric(candidates, use_mecab=use_mecab, metrics=multi_metrics)
+        return mbr_ensemble(candidates, use_mecab=use_mecab, metric=metric)
+
+    refs = [(k, t) for k, t in candidates if k in reference_keys]
+    if not refs:
+        if multi_metrics:
+            return mbr_multi_metric(candidates, use_mecab=use_mecab, metrics=multi_metrics)
+        return mbr_ensemble(candidates, use_mecab=use_mecab, metric=metric)
+
+    try:
+        from rouge import Rouge
+    except ImportError:
+        raise ImportError("rouge 패키지가 필요합니다: pip install rouge")
+
+    rouge = Rouge()
+    if weights is None:
+        weights = {}
+
+    if use_mecab:
+        try:
+            from .mecab_ko import get_mecab
+            m = get_mecab()
+
+            def to_morph(text):
+                if text and text.strip():
+                    morphs = " ".join(m.morphs(text))
+                    return morphs if morphs else "빈요약"
+                return "빈요약"
+        except ImportError:
+            def to_morph(text):
+                return text if text and text.strip() else "빈요약"
+    else:
+
+        def to_morph(text):
+            return text if text and text.strip() else "빈요약"
+
+    ref_morphs = [(k, to_morph(t)) for k, t in refs]
+    metrics = multi_metrics if multi_metrics else [metric]
+
+    best_score = -1.0
+    best_text = candidates[0][1]
+
+    for ck, ctext in candidates:
+        cm = to_morph(ctext)
+        num = 0.0
+        den = 0.0
+        for rk, rm in ref_morphs:
+            try:
+                scores = rouge.get_scores([cm], [rm])[0]
+                if multi_metrics:
+                    u = sum(scores[m]["f"] for m in metrics) / len(metrics)
+                else:
+                    u = scores[metric]["f"]
+                w = float(weights.get(rk, 1.0))
+                num += u * w
+                den += w
+            except Exception:
+                pass
+        sc = num / den if den > 0 else 0.0
+        if sc > best_score:
+            best_score = sc
+            best_text = ctext
+
+    return best_text
+
+
+def apply_mbr_to_dataset_asymmetric(
+    test_df,
+    all_predictions,
+    reference_keys,
+    use_mecab=True,
+    metric="rouge-1",
+    multi_metrics=None,
+    weights=None,
+    verbose=True,
+):
+    """
+    apply_mbr_to_dataset과 동일하나 reference_keys로 비대칭 MBR.
+    all_predictions: {key: [pred per row]}
+    reference_keys: set of keys forming R (same length lists)
+    """
+    model_names = list(all_predictions.keys())
+    n_samples = len(test_df) if hasattr(test_df, "__len__") else test_df
+
+    mbr_preds = []
+    model_selected = {name: 0 for name in model_names}
+
+    iterator = range(n_samples)
+    if verbose:
+        iterator = tqdm(iterator, desc="MBR Ensemble (asymmetric)")
+
+    for i in iterator:
+        candidates = [(name, all_predictions[name][i]) for name in model_names]
+        selected = mbr_ensemble_asymmetric(
+            candidates,
+            reference_keys,
+            use_mecab=use_mecab,
+            metric=metric,
+            multi_metrics=multi_metrics,
+            weights=weights,
+        )
+        mbr_preds.append(selected)
+        for name, text in candidates:
+            if text == selected:
+                model_selected[name] += 1
+                break
+
+    if verbose:
+        print("\n" + "=" * 80)
+        print("MBR 앙상블 결과 - 모델 선택 빈도")
+        print("=" * 80)
+        for name, count in sorted(model_selected.items(), key=lambda x: -x[1]):
+            percentage = 100 * count / n_samples
+            bar = "█" * int(percentage / 2)
+            print(f"  {name:40s}: {count:4d} ({percentage:5.1f}%) {bar}")
+        print("=" * 80)
+
+    return mbr_preds
 
 
 def analyze_mbr_diversity(all_predictions, sample_idx=0, use_mecab=True):

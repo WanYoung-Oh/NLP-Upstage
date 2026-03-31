@@ -26,6 +26,9 @@ from typing import Any, Dict, List
 
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+import unsloth  # noqa: F401 — transformers보다 먼저 임포트해야 최적화 적용됨
+from unsloth import FastModel, is_bfloat16_supported
+
 import pandas as pd
 import numpy as np
 import torch
@@ -202,8 +205,6 @@ def main():
 
     # ── 1. 학습 ───────────────────────────────────────────────────────────────
     if not skip_training:
-        from unsloth import FastModel
-
         # 모델 로드 (4bit 우선, 실패 시 8bit)
         try:
             model, tokenizer = FastModel.from_pretrained(
@@ -295,7 +296,6 @@ def main():
 
         # Trainer 설정 (eval 없음 — train+dev 전체 학습)
         from trl import SFTTrainer, SFTConfig
-        from unsloth import is_bfloat16_supported
 
         sft_config = SFTConfig(
             dataset_text_field="text",
@@ -359,8 +359,6 @@ def main():
 
     import json
     from peft import PeftModel
-    from unsloth import FastModel
-
     adapter_cfg     = json.load(open(os.path.join(LORA_PATH, "adapter_config.json")))
     base_model_name = adapter_cfg["base_model_name_or_path"]
     print(f"  base model: {base_model_name}")

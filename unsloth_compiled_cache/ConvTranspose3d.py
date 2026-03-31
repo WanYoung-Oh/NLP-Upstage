@@ -68,7 +68,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from transformers.models.qwen3.modeling_qwen3 import (Optional, nn)
+from transformers.models.qwen3_5.modeling_qwen3_5 import (F, Optional, nn)
 
 def forward(self, input: Tensor, output_size: Optional[List[int]] = None) -> Tensor:
     original_dtype = input.dtype

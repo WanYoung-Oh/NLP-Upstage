@@ -14,8 +14,13 @@ from typing import List
 @lru_cache(maxsize=1)
 def _tagger():
     import MeCab
-
-    return MeCab.Tagger()
+    try:
+        return MeCab.Tagger()
+    except RuntimeError as e:
+        raise ImportError(
+            "MeCab 초기화 실패 (사전 경로 없음 등). "
+            f"상세: {e}"
+        ) from e
 
 
 class _KoMeCab:

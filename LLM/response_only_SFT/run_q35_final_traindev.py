@@ -1,16 +1,19 @@
 """
-Qwen3.5-9B Response-Only SFT QLoRA — q35_B v2
-===============================================
-기반: run_qlora_sweep_q35.py
+Qwen3.5-9B Response-Only SFT QLoRA — 최종 실험 (train+dev 병합)
+================================================================
+기반: run_qlora_q35_b_v2.py
 
 변경점:
-  - 단일 실험: r=64, alpha=128, lr=2e-4
-  - SEED=2026, MAX_NEW_TOKENS=128, EPOCHS=3
-  - 프롬프트: 화자 태그 명시 + 1~3문장 (v2)
+  - train.csv + dev.csv 병합 학습 (eval 없음)
+  - enable_thinking=True 모드
+  - Topic을 USER_TEMPLATE에 포함하여 학습
+  - LoRA R=32, alpha=32
+  - SEED=3407, EPOCHS=3, MAX_NEW_TOKENS=128
+  - 학습 완료 후 test.csv 추론 → prediction/ 저장
 
 실행:
     cd /data/ephemeral/home/NLP/LLM/response_only_SFT
-    python run_qlora_q35_b_v2.py
+    python run_q35_final_traindev.py
 """
 
 import os
@@ -50,38 +53,47 @@ np.random.seed(SEED)
 torch.manual_seed(SEED)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 고정 하이퍼파라미터
+# 하이퍼파라미터
 # ──────────────────────────────────────────────────────────────────────────────
 MODEL_NAME       = "Qwen/Qwen3.5-9B"
+EXP_NAME         = "q35_final_traindev_r32_a32"
 MAX_SEQ_LENGTH   = 2048
+LORA_R           = 32
+LORA_ALPHA       = 32
 LORA_DROPOUT     = 0.0
+LEARNING_RATE    = 2e-4
 EPOCHS           = 3
 WARMUP_RATIO     = 0.05
 WEIGHT_DECAY     = 0.01
 PER_DEVICE_BATCH = 2
 GRAD_ACCUM       = 16    # effective batch = 2 × 16 = 32
 MAX_NEW_TOKENS   = 128
-DATA_PATH        = os.path.join(ROOT_DIR, "data")
+DATA_PATH        = os.path.join(SCRIPT_DIR, "data")
+
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "outputs", EXP_NAME)
+LORA_PATH  = os.path.join(OUTPUT_DIR, "lora_adapter")
+PRED_DIR   = os.path.join(ROOT_DIR, "prediction")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 단일 실험 정의
-# ──────────────────────────────────────────────────────────────────────────────
-EXPERIMENTS = [
-    {"name": "q35_B_r64_a128_lr2e4_v2", "LORA_R": 64, "LORA_ALPHA": 128, "LEARNING_RATE": 2e-4},
-]
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 프롬프트 v2 — 화자 태그 명시 + 1~3문장
+# 프롬프트 — Topic 포함, enable_thinking=True
 # ──────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = (
     "당신은 한국어 대화 요약 전문가입니다. "
     "대화에는 #Person1#, #Person2# 등의 화자 태그가 사용됩니다. "
     "요약할 때 이 화자 태그를 그대로 사용하여 누가 무엇을 했는지 명확히 구분해주세요. "
-    "핵심 내용만 1~3문장으로 간결하게 요약하세요."
+    "핵심 내용만 1~3문장으로 간결하게 요약하세요. "
     "대화에 등장하는 사람 이름, 장소, 제품명 등 고유명사는 원문 그대로(영어면 영어, 한글이면 한글) 사용하세요."
 )
 
-USER_TEMPLATE = (
+# 학습용: Topic 포함
+USER_TEMPLATE_TRAIN = (
+    "아래 대화의 주제는 \"{topic}\"입니다.\n"
+    "대화를 읽고 핵심 내용을 요약해주세요. "
+    "화자 태그(#Person1# 등)를 유지하세요.\n\n{dialogue}"
+)
+
+# 추론용: test.csv에 topic 없으므로 topic 미포함
+USER_TEMPLATE_INFER = (
     "아래 대화를 읽고 핵심 내용을 요약해주세요. "
     "화자 태그(#Person1# 등)를 유지하세요.\n\n{dialogue}"
 )
@@ -91,7 +103,6 @@ USER_TEMPLATE = (
 # 데이터 전처리
 # ──────────────────────────────────────────────────────────────────────────────
 def load_and_preprocess(csv_path: str, is_train: bool = True) -> pd.DataFrame:
-    """clean_text + filter_by_length 적용."""
     from src.data.preprocess import clean_text, filter_by_length
 
     df = pd.read_csv(csv_path)
@@ -170,70 +181,59 @@ def postprocess(text: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ROUGE 평가
+# 메인
 # ──────────────────────────────────────────────────────────────────────────────
-def compute_rouge_combined(preds: List[str], golds: List[str]) -> Dict:
-    from rouge import Rouge
-    rouge = Rouge()
-    try:
-        from prompts.mecab_ko import get_mecab
-        m = get_mecab()
-        preds_m = [" ".join(m.morphs(p)) if p.strip() else "빈요약" for p in preds]
-        golds_m = [" ".join(m.morphs(g)) if g.strip() else "빈요약" for g in golds]
-        scores = rouge.get_scores(preds_m, golds_m, avg=True)
-        method = "mecab"
-    except Exception:
-        preds_s = [p if p.strip() else "빈요약" for p in preds]
-        golds_s = [g if g.strip() else "빈요약" for g in golds]
-        scores = rouge.get_scores(preds_s, golds_s, avg=True)
-        method = "whitespace"
-    r1 = scores["rouge-1"]["f"]
-    r2 = scores["rouge-2"]["f"]
-    rl = scores["rouge-l"]["f"]
-    return {"r1": r1, "r2": r2, "rl": rl, "combined": r1 + r2 + rl, "method": method}
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 단일 실험 실행
-# ──────────────────────────────────────────────────────────────────────────────
-def run_experiment(exp: Dict) -> Dict:
-    exp_name   = exp["name"]
-    LORA_R     = exp["LORA_R"]
-    LORA_ALPHA = exp["LORA_ALPHA"]
-    LR         = exp["LEARNING_RATE"]
+def main():
+    import time
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(PRED_DIR, exist_ok=True)
 
     print(f"\n{'='*80}")
-    print(f"실험 시작: {exp_name}")
+    print(f"실험: {EXP_NAME}")
     print(f"  model={MODEL_NAME}")
-    print(f"  lora_r={LORA_R}, lora_alpha={LORA_ALPHA}, lr={LR}, epochs={EPOCHS}")
-    print(f"  seed={SEED}, max_new_tokens={MAX_NEW_TOKENS}")
+    print(f"  lora_r={LORA_R}, lora_alpha={LORA_ALPHA}, lr={LEARNING_RATE}")
+    print(f"  epochs={EPOCHS}, seed={SEED}, max_new_tokens={MAX_NEW_TOKENS}")
     print(f"  batch={PER_DEVICE_BATCH}, grad_accum={GRAD_ACCUM} (effective={PER_DEVICE_BATCH*GRAD_ACCUM})")
+    print(f"  enable_thinking=True, topic 포함 학습")
+    print(f"  학습 데이터: train.csv + dev.csv 병합")
     print(f"{'='*80}\n")
 
-    OUTPUT_DIR = os.path.join(SCRIPT_DIR, "outputs", exp_name)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    lora_path = os.path.join(OUTPUT_DIR, "lora_adapter")
+    skip_training = os.path.exists(os.path.join(LORA_PATH, "adapter_model.safetensors"))
 
-    from unsloth import FastModel
-
-    skip_training  = os.path.exists(os.path.join(lora_path, "adapter_model.safetensors"))
-    pred_path      = os.path.join(SCRIPT_DIR, f"prediction/dev_{exp_name}_v2.csv")
-    skip_inference = os.path.exists(pred_path)
-    train_time     = 0
-
+    # ── 1. 학습 ───────────────────────────────────────────────────────────────
     if not skip_training:
-        # ── 1. 모델 로드 ──────────────────────────────────────────────────────
-        model, tokenizer = FastModel.from_pretrained(
-            model_name=MODEL_NAME,
-            max_seq_length=MAX_SEQ_LENGTH,
-            load_in_4bit=True,
-            dtype=torch.bfloat16,
-        )
-        # Qwen3.5-9B VL Processor → tokenizer 추출
+        from unsloth import FastModel
+
+        # 모델 로드 (4bit 우선, 실패 시 8bit)
+        try:
+            model, tokenizer = FastModel.from_pretrained(
+                model_name=MODEL_NAME,
+                max_seq_length=MAX_SEQ_LENGTH,
+                load_in_4bit=True,
+                load_in_8bit=False,
+                full_finetuning=False,
+                dtype=torch.bfloat16,
+                attn_implementation="sdpa",
+            )
+            print("모델 로드 완료 (4bit)")
+        except Exception as e:
+            print(f"4bit 로드 실패 ({e}), 8bit로 재시도...")
+            model, tokenizer = FastModel.from_pretrained(
+                model_name=MODEL_NAME,
+                max_seq_length=MAX_SEQ_LENGTH,
+                load_in_4bit=False,
+                load_in_8bit=True,
+                full_finetuning=False,
+                dtype=torch.bfloat16,
+                attn_implementation="sdpa",
+            )
+            print("모델 로드 완료 (8bit)")
+
+        # Qwen3.5 VL Processor → tokenizer 추출
         if hasattr(tokenizer, "tokenizer"):
             tokenizer = tokenizer.tokenizer
 
-        # ── 2. LoRA 설정 ──────────────────────────────────────────────────────
+        # LoRA 설정
         model = FastModel.get_peft_model(
             model,
             r=LORA_R,
@@ -252,10 +252,12 @@ def run_experiment(exp: Dict) -> Dict:
         total     = sum(p.numel() for p in model.parameters())
         print(f"학습 파라미터: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
 
-        # ── 3. 데이터 준비 ────────────────────────────────────────────────────
+        # 데이터 준비: train + dev 병합
         train_df = load_and_preprocess(os.path.join(DATA_PATH, "train.csv"), is_train=True)
-        dev_df   = load_and_preprocess(os.path.join(DATA_PATH, "dev.csv"),   is_train=False)
-        print(f"Train {len(train_df):,}개 / Dev {len(dev_df):,}개")
+        dev_df   = load_and_preprocess(os.path.join(DATA_PATH, "dev.csv"),   is_train=True)
+        merged_df = pd.concat([train_df, dev_df], ignore_index=True)
+        merged_df = merged_df.sample(frac=1, random_state=SEED).reset_index(drop=True)
+        print(f"병합 학습 데이터: train {len(train_df):,} + dev {len(dev_df):,} = {len(merged_df):,}개")
 
         response_template_str = "<|im_start|>assistant\n"
         response_template_ids = tokenizer.encode(response_template_str, add_special_tokens=False)
@@ -263,10 +265,15 @@ def run_experiment(exp: Dict) -> Dict:
 
         def formatting_prompts_func(examples):
             texts = []
-            for dialogue, summary in zip(examples["dialogue"], examples["summary"]):
+            for dialogue, summary, topic in zip(
+                examples["dialogue"], examples["summary"], examples["topic"]
+            ):
+                topic_str = str(topic) if pd.notna(topic) else ""
                 messages = [
                     {"role": "system",    "content": SYSTEM_PROMPT},
-                    {"role": "user",      "content": USER_TEMPLATE.format(dialogue=dialogue)},
+                    {"role": "user",      "content": USER_TEMPLATE_TRAIN.format(
+                        topic=topic_str, dialogue=dialogue
+                    )},
                     {"role": "assistant", "content": str(summary)},
                 ]
                 text = tokenizer.apply_chat_template(
@@ -276,12 +283,9 @@ def run_experiment(exp: Dict) -> Dict:
                 texts.append(text)
             return {"text": texts}
 
-        train_dataset = Dataset.from_pandas(train_df[["dialogue", "summary"]]).map(
-            formatting_prompts_func, batched=True
-        )
-        dev_dataset = Dataset.from_pandas(dev_df[["dialogue", "summary"]]).map(
-            formatting_prompts_func, batched=True
-        )
+        train_dataset = Dataset.from_pandas(
+            merged_df[["dialogue", "summary", "topic"]]
+        ).map(formatting_prompts_func, batched=True)
 
         collator = ResponseOnlyDataCollator(
             tokenizer=tokenizer,
@@ -289,13 +293,9 @@ def run_experiment(exp: Dict) -> Dict:
             max_length=MAX_SEQ_LENGTH,
         )
 
-        # ── 4. Trainer 설정 ───────────────────────────────────────────────────
+        # Trainer 설정 (eval 없음 — train+dev 전체 학습)
         from trl import SFTTrainer, SFTConfig
         from unsloth import is_bfloat16_supported
-
-        steps_per_epoch = len(train_dataset) // (PER_DEVICE_BATCH * GRAD_ACCUM)
-        eval_steps_val  = max(1, steps_per_epoch // 2)
-        print(f"steps/epoch={steps_per_epoch}, eval_steps={eval_steps_val}")
 
         sft_config = SFTConfig(
             dataset_text_field="text",
@@ -303,11 +303,10 @@ def run_experiment(exp: Dict) -> Dict:
             packing=False,
 
             per_device_train_batch_size=PER_DEVICE_BATCH,
-            per_device_eval_batch_size=1,
             gradient_accumulation_steps=GRAD_ACCUM,
 
             num_train_epochs=EPOCHS,
-            learning_rate=LR,
+            learning_rate=LEARNING_RATE,
             lr_scheduler_type="cosine",
             warmup_ratio=WARMUP_RATIO,
             weight_decay=WEIGHT_DECAY,
@@ -316,13 +315,9 @@ def run_experiment(exp: Dict) -> Dict:
             bf16=is_bfloat16_supported(),
 
             logging_steps=10,
-            eval_strategy="steps",
-            eval_steps=eval_steps_val,
-            save_strategy="steps",
-            save_steps=eval_steps_val,
-            save_total_limit=2,
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
+            eval_strategy="no",
+            save_strategy="epoch",
+            save_total_limit=1,
 
             seed=SEED,
             output_dir=OUTPUT_DIR,
@@ -335,47 +330,38 @@ def run_experiment(exp: Dict) -> Dict:
             model=model,
             tokenizer=tokenizer,
             train_dataset=train_dataset,
-            eval_dataset=dev_dataset,
             args=sft_config,
             data_collator=collator,
         )
 
-        # ── 5. 학습 ───────────────────────────────────────────────────────────
-        print(f"\n[{exp_name}] 학습 시작...")
+        print(f"\n학습 시작...")
+        t0 = time.time()
         stats = trainer.train()
-        train_time = stats.metrics.get("train_runtime", 0)
+        train_time = time.time() - t0
         print(f"학습 완료: {train_time:.0f}초 ({train_time/60:.1f}분)")
 
-        model.save_pretrained(lora_path)
-        tokenizer.save_pretrained(lora_path)
-        print(f"LoRA 저장: {lora_path}")
+        model.save_pretrained(LORA_PATH)
+        tokenizer.save_pretrained(LORA_PATH)
+        print(f"LoRA 저장: {LORA_PATH}")
+
         del model, trainer
         gc.collect()
         torch.cuda.empty_cache()
 
     else:
-        print(f"[{exp_name}] 체크포인트 존재 → 학습 건너뜀, 추론만 실행")
+        print(f"체크포인트 존재 → 학습 건너뜀: {LORA_PATH}")
 
-    # ── 6. dev 추론 ───────────────────────────────────────────────────────────
-    if skip_inference:
-        print(f"[{exp_name}] 추론 결과 파일 존재 → 추론 건너뜀, ROUGE만 재계산")
-        dev_df = load_and_preprocess(os.path.join(DATA_PATH, "dev.csv"), is_train=False)
-        preds  = pd.read_csv(pred_path)["pred_summary"].tolist()
-        golds  = dev_df["summary"].tolist()
-        scores = compute_rouge_combined(preds, golds)
-        print(f"\n{'='*60}")
-        print(f"[{exp_name}] Dev ROUGE ({scores['method']} 기반, 캐시)")
-        print(f"  R1={scores['r1']:.4f}  R2={scores['r2']:.4f}  RL={scores['rl']:.4f}  Combined={scores['combined']:.4f}")
-        print(f"{'='*60}\n")
-        return {"exp_name": exp_name, "lora_r": LORA_R, "lora_alpha": LORA_ALPHA,
-                "lr": LR, "train_sec": train_time, **scores}
+    # ── 2. test.csv 추론 ──────────────────────────────────────────────────────
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    pred_path = os.path.join(PRED_DIR, f"q35_final_traindev_{timestamp}.csv")
 
-    print(f"\n[{exp_name}] dev 추론 시작 (v2 프롬프트, greedy, use_cache=False)...")
+    print(f"\ntest.csv 추론 시작 (enable_thinking=True, greedy)...")
 
     import json
     from peft import PeftModel
+    from unsloth import FastModel
 
-    adapter_cfg     = json.load(open(os.path.join(lora_path, "adapter_config.json")))
+    adapter_cfg     = json.load(open(os.path.join(LORA_PATH, "adapter_config.json")))
     base_model_name = adapter_cfg["base_model_name_or_path"]
     print(f"  base model: {base_model_name}")
 
@@ -384,21 +370,25 @@ def run_experiment(exp: Dict) -> Dict:
         max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
         dtype=torch.bfloat16,
+        attn_implementation="sdpa",
     )
-    tokenizer_inf = AutoTokenizer.from_pretrained(lora_path, trust_remote_code=True)
+    tokenizer_inf = AutoTokenizer.from_pretrained(LORA_PATH, trust_remote_code=True)
     tokenizer_inf.padding_side = "left"
     if tokenizer_inf.pad_token is None:
         tokenizer_inf.pad_token = tokenizer_inf.eos_token
-    model_inf = PeftModel.from_pretrained(base_model_inf, lora_path)
-    model_inf.eval()
 
-    dev_df = load_and_preprocess(os.path.join(DATA_PATH, "dev.csv"), is_train=False)
+    model_inf = PeftModel.from_pretrained(base_model_inf, LORA_PATH)
+    model_inf.eval()
+    model_inf.generation_config.max_length = MAX_SEQ_LENGTH
+
+    test_df = pd.read_csv(os.path.join(DATA_PATH, "test.csv"))
+    print(f"테스트 데이터: {len(test_df)}행")
 
     preds = []
-    for _, row in tqdm(dev_df.iterrows(), total=len(dev_df), desc="dev inference"):
+    for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="test inference"):
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": USER_TEMPLATE.format(dialogue=row["dialogue"])},
+            {"role": "user",   "content": USER_TEMPLATE_INFER.format(dialogue=row["dialogue"])},
         ]
         text = tokenizer_inf.apply_chat_template(
             messages, tokenize=False,
@@ -413,58 +403,20 @@ def run_experiment(exp: Dict) -> Dict:
                 **inputs,
                 max_new_tokens=MAX_NEW_TOKENS,
                 do_sample=False,
-                use_cache=False,
                 pad_token_id=tokenizer_inf.eos_token_id,
             )
         generated = out[0][inputs["input_ids"].shape[1]:]
         summary   = tokenizer_inf.decode(generated, skip_special_tokens=True).strip()
         preds.append(postprocess(summary))
 
-    os.makedirs(os.path.join(SCRIPT_DIR, "prediction"), exist_ok=True)
-    dev_df.assign(pred_summary=preds).to_csv(pred_path, index=False)
-
-    # ── 7. ROUGE 평가 ─────────────────────────────────────────────────────────
-    golds  = dev_df["summary"].tolist()
-    scores = compute_rouge_combined(preds, golds)
-
-    print(f"\n{'='*60}")
-    print(f"[{exp_name}] Dev ROUGE ({scores['method']} 기반)")
-    print(f"  R1={scores['r1']:.4f}  R2={scores['r2']:.4f}  RL={scores['rl']:.4f}  Combined={scores['combined']:.4f}")
-    print(f"{'='*60}\n")
+    result_df = test_df[["fname"]].copy()
+    result_df["summary"] = preds
+    result_df.to_csv(pred_path, index=False)
+    print(f"\n추론 완료. 저장: {pred_path} ({len(result_df)}행)")
 
     del model_inf, base_model_inf
     gc.collect()
     torch.cuda.empty_cache()
-
-    return {
-        "exp_name":   exp_name,
-        "lora_r":     LORA_R,
-        "lora_alpha": LORA_ALPHA,
-        "lr":         LR,
-        "train_sec":  train_time,
-        **scores,
-    }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 메인
-# ──────────────────────────────────────────────────────────────────────────────
-def main():
-    results = []
-    for exp in EXPERIMENTS:
-        result = run_experiment(exp)
-        results.append(result)
-
-    df = pd.DataFrame(results)
-    print(f"\n{'='*80}")
-    print("최종 결과")
-    print(f"{'='*80}")
-    print(df[["exp_name", "lora_r", "lora_alpha", "lr",
-              "r1", "r2", "rl", "combined"]].to_string(index=False))
-
-    result_csv = os.path.join(SCRIPT_DIR, "prediction/qlora_q35_b_v2_results.csv")
-    df.to_csv(result_csv, index=False)
-    print(f"\n결과 저장: {result_csv}")
 
 
 if __name__ == "__main__":

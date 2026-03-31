@@ -1,0 +1,6 @@
+#!/data/ephemeral/home/NLP/nlp-py311/bin/python
+import sys
+from MeCab.cli import parse
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(parse())

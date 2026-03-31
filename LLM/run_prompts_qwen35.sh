@@ -2,6 +2,8 @@
 # run_prompts_qwen35.sh
 # qwen35_9b_lora_sft 프롬프트 앙상블 백그라운드 실행
 #
+# r4b_traindev 체크포인트 + response_only_SFT/data 는 동일 폴더의 run_prompts_r4b.sh 사용
+#
 # 실행: bash run_prompts_qwen35.sh [--resume]
 # 로그: logs/run_prompts_qwen35_<timestamp>.log
 

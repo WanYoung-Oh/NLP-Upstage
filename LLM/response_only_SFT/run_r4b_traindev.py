@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+import unsloth  # noqa: must be before transformers
 import pandas as pd
 import numpy as np
 import torch
@@ -42,14 +43,14 @@ LORA_R           = 32
 LORA_ALPHA       = 32
 LORA_DROPOUT     = 0.0
 LEARNING_RATE    = 2e-4
-EPOCHS           = 1
+EPOCHS           = 2
 WARMUP_RATIO     = 0.05
 WEIGHT_DECAY     = 0.01
 PER_DEVICE_BATCH = 2
 GRAD_ACCUM       = 16     # effective batch = 32
 MAX_SEQ_LENGTH   = 1024
 MAX_NEW_TOKENS   = 128
-SEED             = 3407
+SEED             = 5307
 
 OUTPUT_DIR  = str(SCRIPT_DIR / "outputs" / EXP_NAME)
 LORA_PATH   = os.path.join(OUTPUT_DIR, "lora_adapter")
@@ -109,7 +110,7 @@ def load_and_preprocess(csv_path: str, apply_filter: bool = True) -> pd.DataFram
     if "summary" in df.columns:
         df["summary"] = df["summary"].apply(clean_text)
     if apply_filter and "summary" in df.columns:
-        df = filter_by_length(df, dialogue_max=830, summary_min=50, summary_max=250)
+        df = filter_by_length(df, dialogue_max=1500, summary_min=50, summary_max=250)
     after = len(df)
     print(f"[전처리] {os.path.basename(csv_path)}: {before} → {after}행")
     return df.reset_index(drop=True)
@@ -180,7 +181,6 @@ def train():
     # GPU 여유 대기 (이전 추론 프로세스가 종료될 때까지)
     wait_for_gpu(free_gb_threshold=20.0, poll_sec=60)
 
-    import unsloth  # noqa
     from unsloth import FastLanguageModel, is_bfloat16_supported
     from trl import SFTTrainer, SFTConfig
 
@@ -296,7 +296,6 @@ def infer_test():
     print(f"[추론] test.csv — {EXP_NAME}")
     print(f"{'='*70}\n")
 
-    import unsloth  # noqa
     from unsloth import FastLanguageModel
     from peft import PeftModel
 

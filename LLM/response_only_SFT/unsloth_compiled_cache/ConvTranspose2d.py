@@ -62,27 +62,19 @@ pass
 
 from unsloth_zoo import DEVICE_TYPE_TORCH, DEVICE_COUNT
 
-torch_compile_options = {'epilogue_fusion': True, 'max_autotune': False, 'shape_padding': True, 'trace.enabled': False, 'triton.cudagraphs': False, 'debug': False, 'dce': True, 'memory_planning': True, 'coordinate_descent_tuning': False, 'trace.graph_diagram': False, 'compile_threads': 32, 'group_fusion': True, 'disable_progress': True, 'verbose_progress': False, 'triton.multi_kernel': 0, 'triton.use_block_ptr': False, 'triton.enable_persistent_tma_matmul': True, 'triton.autotune_at_compile_time': False, 'triton.cooperative_reductions': False, 'cuda.compile_opt_level': '-O2', 'cuda.enable_cuda_lto': True, 'combo_kernels': False, 'benchmark_combo_kernel': True, 'combo_kernel_foreach_dynamic_shapes': True}
+torch_compile_options = {'epilogue_fusion': True, 'max_autotune': False, 'shape_padding': True, 'trace.enabled': False, 'triton.cudagraphs': False, 'debug': False, 'dce': True, 'memory_planning': True, 'coordinate_descent_tuning': False, 'trace.graph_diagram': False, 'compile_threads': 32, 'group_fusion': True, 'disable_progress': True, 'verbose_progress': False, 'triton.multi_kernel': 0, 'triton.use_block_ptr': False, 'triton.autotune_at_compile_time': False, 'cuda.compile_opt_level': '-O2', 'cuda.enable_cuda_lto': True, 'combo_kernels': False, 'benchmark_combo_kernel': True, 'combo_kernel_foreach_dynamic_shapes': True}
 from torch import Tensor
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from transformers.models.qwen3_5.modeling_qwen3_5 import (F, nn)
+from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (F, Optional, nn)
 
-def forward(self, input: Tensor, output_size: list[int] | None = None) -> Tensor:
+def forward(self, input: Tensor, output_size: Optional[List[int]] = None) -> Tensor:
     original_dtype = input.dtype
     input = input.to(self.weight.dtype)
     original_dtype = input.dtype
     input = input.to(self.weight.dtype)
-    """
-    Performs the forward pass.
-
-    Attributes:
-        input (Tensor): The input tensor.
-        output_size (list[int], optional): A list of integers representing
-            the size of the output tensor. Default is None.
-    """
     if self.padding_mode != "zeros":
         raise ValueError(
             "Only `zeros` padding mode is supported for ConvTranspose2d"

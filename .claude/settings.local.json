@@ -23,7 +23,17 @@
       "WebFetch(domain:www.emergentmind.com)",
       "WebFetch(domain:aclanthology.org)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:medium.com)"
+      "WebFetch(domain:medium.com)",
+      "Bash(source /data/ephemeral/home/NLP/nlp-py311/bin/activate)",
+      "Bash(pip index:*)",
+      "Bash(du -sh /data/ephemeral/home/.cache/huggingface/hub/models--unsloth--Qwen3.5-35B-A3B/snapshots/61f7d17ddada509622e6f99972930732d61a9e0b/*.safetensors)",
+      "Read(//data/ephemeral/home/NLP/**)",
+      "Read(//data/ephemeral/home/.cache/huggingface/hub/models--unsloth--Qwen3.5-35B-A3B/snapshots/61f7d17ddada509622e6f99972930732d61a9e0b/**)",
+      "Bash(pkill -f \"infer_qwen35_35b_a3b_base.py\")",
+      "Bash(kill 63807)",
+      "Bash(kill -9 63808)",
+      "Bash(kill -9 66086)",
+      "Bash(pkill -9 -f run_r4b_traindev.py)"
     ],
     "deny": [],
     "ask": []

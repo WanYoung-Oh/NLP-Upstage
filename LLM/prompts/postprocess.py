@@ -33,7 +33,10 @@ def postprocess_summary(text):
         "#Person1#은..."
     """
     # 1. <think> 태그 제거 (Qwen3 특성)
+    # 완전한 <think>...</think> 블록 제거
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # enable_thinking=True 시 모델 출력이 </think>로 시작하는 경우 제거
+    text = re.sub(r'^.*?</think>\s*', '', text, flags=re.DOTALL)
     
     # 2. 화자 태그 공백 정규화 (#Person 1# → #Person1#)
     text = re.sub(r'#Person\s+(\d+)#', r'#Person\1#', text)
@@ -68,10 +71,11 @@ def advanced_postprocess(text, max_speaker_tags=5):
     """
     # 1. <think> 태그 제거
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    
+    text = re.sub(r'^.*?</think>\s*', '', text, flags=re.DOTALL)
+
     # 2. 화자 태그 정규화
     text = re.sub(r'#Person\s+(\d+)#', r'#Person\1#', text)
-    
+
     # 3. 불필요한 접두사 제거 (확장)
     text = re.sub(r'^(요약\s*:\s*|Summary\s*:\s*|대화\s*요약\s*:\s*)', '', text)
     

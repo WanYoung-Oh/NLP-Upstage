@@ -30,13 +30,14 @@ from prompts.mbr_prompts import PROMPT_VARIANTS as _MBR_PROMPT_VARIANTS
 
 ADAPTER_PATH = SCRIPT_DIR / "response_only_SFT/outputs/q35_final_traindev_r32_a32/lora_adapter"
 TEST_FILE = SCRIPT_DIR / "response_only_SFT/data/test.csv"
-PRED_DIR = Path("/data/ephemeral/home/prediction")
+PRED_DIR = Path("/data/ephemeral/home/NLP/prediction")
 LOG_DIR = SCRIPT_DIR / "logs"
 
-PROMPT_VARIANTS = list(_MBR_PROMPT_VARIANTS.keys())
+_EXCLUDE_VARIANTS = {"base"}
+PROMPT_VARIANTS = [k for k in _MBR_PROMPT_VARIANTS.keys() if k not in _EXCLUDE_VARIANTS]
 MAX_SEQ_LENGTH = 2048
 USE_TOPIC = True
-ENABLE_THINKING = True
+ENABLE_THINKING = False
 
 # ── 헬퍼 ──────────────────────────────────────────────────────
 

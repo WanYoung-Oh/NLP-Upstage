@@ -50,7 +50,8 @@ class InferencePipeline:
         self.model.eval()
     
     def generate_single(self, dialogue, topic="", prompt_variant="base", 
-                       max_new_tokens=128, do_sample=False, **generation_kwargs):
+                       max_new_tokens=128, do_sample=False, enable_thinking=False,
+                       **generation_kwargs):
         """
         단일 대화에 대한 요약 생성
         
@@ -60,6 +61,7 @@ class InferencePipeline:
             prompt_variant: 프롬프트 변형 이름
             max_new_tokens: 최대 생성 토큰 수
             do_sample: 샘플링 여부 (False면 Greedy)
+            enable_thinking: Qwen3 chat_template의 Thinking 모드 (학습과 맞출 때 True)
             **generation_kwargs: 추가 생성 파라미터
         
         Returns:
@@ -73,7 +75,7 @@ class InferencePipeline:
             messages,
             tokenize=False,
             add_generation_prompt=True,  # 추론 시 True
-            enable_thinking=False,        # Qwen3 Thinking 모드 비활성화
+            enable_thinking=enable_thinking,
         )
         
         # 토크나이즈
@@ -99,7 +101,8 @@ class InferencePipeline:
         return summary
     
     def generate_with_prompts(self, df, prompt_variants=None, use_topic=False,
-                             max_new_tokens=128, variants_output_dir=None, verbose=True):
+                             max_new_tokens=128, variants_output_dir=None, verbose=True,
+                             enable_thinking=False):
         """
         여러 프롬프트로 전체 데이터셋 추론
 
@@ -110,6 +113,7 @@ class InferencePipeline:
             max_new_tokens: 최대 생성 토큰 수
             variants_output_dir: 변형별 중간 결과 저장 디렉토리 (None이면 저장 안 함)
             verbose: 진행 상황 출력 여부
+            enable_thinking: Qwen3 Thinking 모드 (postprocess_summary가 </think> 구간 제거)
 
         Returns:
             {prompt_name: [predictions]} 딕셔너리
@@ -147,6 +151,7 @@ class InferencePipeline:
                     prompt_variant=variant_name,
                     max_new_tokens=max_new_tokens,
                     do_sample=False,  # Greedy 디코딩
+                    enable_thinking=enable_thinking,
                 )
 
                 predictions.append(summary)
@@ -169,7 +174,8 @@ class InferencePipeline:
     
     def run(self, test_df, use_mbr=True, use_topic=False,
             prompt_variants=None, max_new_tokens=128,
-            output_file=None, variants_output_dir=None, verbose=True):
+            output_file=None, variants_output_dir=None, verbose=True,
+            enable_thinking=False):
         """
         전체 추론 파이프라인 실행
         
@@ -181,6 +187,7 @@ class InferencePipeline:
             max_new_tokens: 최대 생성 토큰 수
             output_file: 결과 저장 파일 경로 (CSV)
             verbose: 진행 상황 출력 여부
+            enable_thinking: Qwen3 Thinking 모드
         
         Returns:
             최종 요약 리스트
@@ -203,6 +210,7 @@ class InferencePipeline:
             max_new_tokens=max_new_tokens,
             variants_output_dir=variants_output_dir,
             verbose=verbose,
+            enable_thinking=enable_thinking,
         )
 
         # 2. MBR 앙상블 또는 단일 프롬프트 선택

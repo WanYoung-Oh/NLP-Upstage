@@ -208,13 +208,13 @@ PROMPT_VARIANTS = {
     # "abstract": PROMPT_2_ABSTRACT,         # 4-B 실험: 단독 0.7176 → 하위권, MBR 노이즈
     # "oneshot": PROMPT_3_ONESHOT,           # 4-B 실험: 단독 0.7130 → 하위권, MBR 노이즈
     "topic": PROMPT_4_TOPIC,
-    "narrative": PROMPT_5_NARRATIVE,
+    # "narrative": PROMPT_5_NARRATIVE,
     "qa_style": PROMPT_6_QA,
     # "threeshot": PROMPT_7_THREESHOT,       # 4-B 실험: 단독 0.6993 → 최하위, MBR 노이즈
     # "base_copy": PROMPT_8_BASE_COPY,  # base와 동일 → 다양성 기여 없음, 신규 3종 추가로 불필요
     "gold_mimic": PROMPT_GOLD_MIMIC,
-    "observer": PROMPT_OBSERVER,
-    "length_constrained": PROMPT_LENGTH_CONSTRAINED,
+    # "observer": PROMPT_OBSERVER,
+    # "length_constrained": PROMPT_LENGTH_CONSTRAINED,
 }
 
 

@@ -1,10 +1,11 @@
 """
-qwen35_9b_lora_sft 전용 프롬프트 앙상블 실행 스크립트
+qwen35 전용 프롬프트 앙상블 실행 스크립트
 
-- 모델을 한 번만 로드하여 4개 프롬프트(base, topic, qa_style, gold_mimic) 순차 추론
-- 각 프롬프트 완료 시마다 서브미션 CSV 저장
-- 전체 완료 후 4-프롬프트 MBR 실행 → 최종 서브미션 CSV 저장
-- 토크나이저: 학습 시 어댑터 폴더에 저장된 것 그대로 사용
+- 어댑터: response_only_SFT/outputs/q35_final_traindev_r32_a32/lora_adapter
+- 프롬프트: prompts/mbr_prompts.PROMPT_VARIANTS 키 순서 (base, topic, qa_style, gold_mimic)
+- use_topic=True, enable_thinking=True (q35_final_traindev 학습 설정과 동일)
+- 모델을 한 번만 로드하여 변형별 순차 추론 → MBR → 최종 서브미션 CSV
+- 토크나이저: 어댑터 폴더에 저장된 것 그대로 사용
 
 실행:
     python run_prompts_qwen35.py [--resume]
@@ -21,14 +22,21 @@ import torch
 import pandas as pd
 
 # ── 경로 설정 ─────────────────────────────────────────────────
-SCRIPT_DIR    = Path(__file__).resolve().parent
-ADAPTER_PATH  = SCRIPT_DIR / "response_only_SFT/outputs/qwen35_9b_lora_sft/lora_adapter"
-TEST_FILE     = SCRIPT_DIR / "response_only_SFT/data/test.csv"
-PRED_DIR      = Path("/data/ephemeral/home/prediction")
-LOG_DIR       = SCRIPT_DIR / "logs"
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-PROMPT_VARIANTS = ["base", "topic", "qa_style", "gold_mimic"]
-MAX_SEQ_LENGTH  = 2048
+from prompts.mbr_prompts import PROMPT_VARIANTS as _MBR_PROMPT_VARIANTS
+
+ADAPTER_PATH = SCRIPT_DIR / "response_only_SFT/outputs/q35_final_traindev_r32_a32/lora_adapter"
+TEST_FILE = SCRIPT_DIR / "response_only_SFT/data/test.csv"
+PRED_DIR = Path("/data/ephemeral/home/prediction")
+LOG_DIR = SCRIPT_DIR / "logs"
+
+PROMPT_VARIANTS = list(_MBR_PROMPT_VARIANTS.keys())
+MAX_SEQ_LENGTH = 2048
+USE_TOPIC = True
+ENABLE_THINKING = True
 
 # ── 헬퍼 ──────────────────────────────────────────────────────
 
@@ -98,7 +106,8 @@ def main(args: argparse.Namespace) -> None:
     log(f"실행 시작 (timestamp={timestamp})")
     log(f"어댑터: {ADAPTER_PATH}")
     log(f"테스트: {TEST_FILE}")
-    log(f"프롬프트: {PROMPT_VARIANTS}")
+    log(f"프롬프트 (mbr_prompts): {PROMPT_VARIANTS}")
+    log(f"use_topic={USE_TOPIC}, enable_thinking={ENABLE_THINKING}")
 
     # 테스트 데이터 로드
     test_df = pd.read_csv(TEST_FILE)
@@ -108,8 +117,6 @@ def main(args: argparse.Namespace) -> None:
     model, tokenizer = load_model_and_tokenizer(ADAPTER_PATH)
     log("모델 로드 완료")
 
-    # sys.path에 프로젝트 루트 추가 (prompts 패키지 임포트용)
-    sys.path.insert(0, str(SCRIPT_DIR))
     from prompts.inference import InferencePipeline
     from prompts.mbr_decoding import apply_mbr_to_dataset
 
@@ -142,14 +149,14 @@ def main(args: argparse.Namespace) -> None:
         log(f"추론 시작: {variant}")
         t0 = time.time()
 
-        use_topic = True   # topic 프롬프트는 topic 컬럼 사용; 나머지는 무해
         predictions = pipeline.generate_with_prompts(
             df=test_df,
             prompt_variants=[variant],
-            use_topic=use_topic,
+            use_topic=USE_TOPIC,
             max_new_tokens=128,
             variants_output_dir=None,   # 아래에서 직접 저장
             verbose=True,
+            enable_thinking=ENABLE_THINKING,
         )[variant]
 
         elapsed = int(time.time() - t0)
